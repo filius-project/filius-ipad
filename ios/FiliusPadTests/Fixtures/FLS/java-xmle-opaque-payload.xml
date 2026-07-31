@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<java version="24" class="java.beans.XMLDecoder" futureRoot="root-attribute">
+ <?m012 preserve-root-pi?>
+ <!-- preserve-root-comment -->
+ <string>Filius version: M012/S01 adversarial lossless fixture</string>
+ <string>unconsumed-top-level-string</string>
+ <object class="java.util.LinkedList" id="ResidualTopList">
+  <void method="add"><object class="com.example.UnconsumedTopLevel"><void property="marker"><string>top-level-residual</string></void></object></void>
+ </object>
+ <object class="java.util.LinkedList">
+  <void method="add">
+   <object class="filius.gui.netzwerksicht.GUIKnotenItem" id="LegacyNode0">
+    <void property="typ"><string>Computer</string></void>
+    <void property="bounds"><object class="java.awt.Rectangle"><int>999</int><int>998</int><int>70</int><int>68</int></object></void>
+    <void property="imageLabel">
+     <object class="filius.gui.netzwerksicht.JSidebarButton">
+      <void property="bounds"><object class="java.awt.Rectangle" id="LegacyLabelBounds0"><int>40</int><int>80</int><int>70</int><int>68</int></object></void>
+      <void property="text"><string>Original server</string></void>
+      <void property="futureImageLabel"><object class="com.example.ImageLabelMetadata" id="ImageMetadata0"><void property="marker"><string>image-label-residual</string></void><void property="self"><object idref="ImageMetadata0"/></void></object></void>
+     </object>
+    </void>
+    <void property="knoten">
+     <object class="filius.hardware.knoten.Rechner">
+      <void property="name"><string>Original server</string></void>
+      <void property="netzwerkInterfaces">
+       <void method="futureOperation"><object class="com.example.FutureInterfaceOperation" id="FutureOperation0"><void property="marker"><string>future-operation-before-port</string></void><void property="self"><object idref="FutureOperation0"/></void></object></void>
+       <void id="OpaqueIndexedBefore" index="0" method="futureOperation"><object idref="FutureOperation0"/></void>
+       <void id="LegacyInterface0" index="0">
+        <void property="ip"><string>10.0.0.1</string></void>
+        <void property="subnetzMaske"><string>255.255.255.0</string></void>
+        <void id="LegacyPort0" property="port"/>
+        <void property="futureInterface"><object class="com.example.InterfaceMetadata"><void property="marker"><string>interface-residual</string></void></object></void>
+       </void>
+       <void id="OpaqueIndexedAfter" index="0" method="futureOperation"><object idref="FutureOperation0"/></void>
+      </void>
+      <void id="LegacySystem0" property="systemSoftware">
+       <void id="LegacyFileSystem0" property="dateisystem">
+        <void id="LegacyWorkingDirectory0" property="arbeitsVerzeichnis"/>
+       </void>
+       <void property="installierteAnwendungen">
+        <void method="put" id="LegacyWebServerPut">
+         <string>filius.software.www.WebServer</string>
+         <object class="filius.software.www.WebServer" id="LegacyWebServer0">
+          <void property="port"><int>8080</int></void>
+          <void property="futureTlsProfile"><object class="com.example.TLSProfile" id="TLSProfile0"><void property="marker"><string>webserver-residual</string></void><void property="owner"><object idref="LegacyWebServer0"/></void></object></void>
+          <void property="systemSoftware"><object idref="LegacySystem0"/></void>
+         </object>
+        </void>
+        <void method="put" id="AliasBrowserPut">
+         <string>com.example.AliasBrowserKey</string>
+         <object class="filius.software.www.WebBrowser" id="AliasBrowser0">
+          <void property="futureBrowser"><string>unknown-key-recognized-class</string></void>
+          <void property="systemSoftware"><object idref="LegacySystem0"/></void>
+         </object>
+        </void>
+        <void method="put" id="KeyClassMismatchPut">
+         <string>filius.software.dns.DNSServer</string>
+         <object class="com.example.NotActuallyDNS" id="NotDNS0"><void property="marker"><string>recognized-key-unknown-class</string></void><void property="self"><object idref="NotDNS0"/></void></object>
+        </void>
+        <void method="put" id="LegacyTerminalPut">
+         <string>filius.software.lokal.Terminal</string>
+         <object class="filius.software.lokal.Terminal" id="LegacyTerminal0">
+          <void property="aktuellerOrdner"><object idref="LegacyWorkingDirectory0"/></void>
+          <void property="futureTerminal"><string>terminal-working-directory-residual</string></void>
+         </object>
+        </void>
+        <void method="put" id="UnknownApplicationPut">
+         <string>com.example.InertTeachingApplication</string>
+         <object class="com.example.InertTeachingApplication" id="UnknownApplication0"><void property="payload"><string>unknown-application-residual</string></void><void property="nestedRecognizedNodeMetadata"><object class="filius.gui.netzwerksicht.GUIKnotenItem"><void property="typ"><string>Switch</string></void><void property="bounds"><object class="java.awt.Rectangle"><int>880</int><int>881</int><int>70</int><int>68</int></object></void><void property="futureNestedNode"><string>nested-recognized-node-must-stay-opaque</string></void></object></void><void property="nestedRecognizedMetadata"><object class="filius.gui.netzwerksicht.GUIDocuItem"><void property="type"><int>2</int></void><void property="x"><int>700</int></void><void property="y"><int>701</int></void><void property="width"><int>702</int></void><void property="height"><int>703</int></void><void property="text"><string>nested-recognized-documentation-must-stay-opaque</string></void></object></void><void property="systemSoftware"><object idref="LegacySystem0"/></void><void property="self"><object idref="UnknownApplication0"/></void></object>
+        </void>
+       </void>
+      </void>
+     </object>
+    </void>
+    <void property="futureNode"><string>node-residual</string></void>
+   </object>
+  </void>
+  <void method="add">
+   <object class="filius.gui.netzwerksicht.GUIKnotenItem" id="LegacyNode1">
+    <void property="typ"><string>Computer</string></void>
+    <void property="imageLabel"><object class="filius.gui.netzwerksicht.JSidebarButton"><void property="bounds"><object class="java.awt.Rectangle"><int>280</int><int>80</int><int>70</int><int>68</int></object></void><void property="text"><string>Original client</string></void></object></void>
+    <void property="knoten"><object class="filius.hardware.knoten.Rechner"><void property="name"><string>Original client</string></void><void property="netzwerkInterfaces"><void index="0"><void property="ip"><string>10.0.0.2</string></void><void property="subnetzMaske"><string>255.255.255.0</string></void><void id="LegacyPort1" property="port"/></void></void></object></void>
+   </object>
+  </void>
+ </object>
+ <object class="java.util.LinkedList">
+  <void method="add">
+   <object class="filius.gui.netzwerksicht.GUIKabelItem">
+    <void property="dasKabel"><object class="filius.hardware.Kabel"><void property="anschluesse"><array class="filius.hardware.Port" length="2"><void id="OpaqueCableIndexed" index="0" method="futureOperation"><object idref="FutureOperation0"/></void><void index="0"><object idref="LegacyPort0"/></void><void index="1"><object idref="LegacyPort1"/></void></array></void><void property="futureCableHardware"><string>cable-hardware-residual</string></void></object></void>
+    <void property="kabelpanel"><void property="bounds"><object class="java.awt.Rectangle"><int>111</int><int>112</int><int>113</int><int>114</int></object></void><void property="ziel1"><object idref="LegacyNode0"/></void><void property="ziel2"><object idref="LegacyNode1"/></void><void property="futureCablePanel"><string>cable-panel-residual</string></void></void>
+    <void property="futureCable"><object class="com.example.CableMetadata"><void property="marker"><string>cable-residual</string></void></object></void>
+   </object>
+  </void>
+ </object>
+ <object class="java.util.ArrayList">
+  <void method="add">
+   <object class="filius.gui.netzwerksicht.GUIDocuItem" id="LegacyDoc0">
+    <void property="color"><object class="java.awt.Color"><int>10</int><int>20</int><int>30</int><int>255</int></object></void>
+    <void property="font"><object class="java.awt.Font"><string>Dialog</string><int>1</int><int>16</int></object></void>
+    <void property="height"><int>80</int></void><void property="text"><string>Original documentation</string></void><void property="type"><int>2</int></void><void property="width"><int>220</int></void><void property="x"><int>100</int></void><void property="y"><int>60</int></void>
+    <void property="futureDocumentation"><object class="com.example.DocumentationMetadata" id="DocMetadata0"><void property="marker"><string>documentation-residual</string></void><void property="self"><object idref="DocMetadata0"/></void></object></void>
+   </object>
+  </void>
+ </object>
+ <object class="com.example.DecoderMetadata" id="DecoderMetadata0"><void property="marker"><string>decoder-root-residual</string></void><void property="nestedRecognizedMetadata"><object class="filius.gui.netzwerksicht.GUIKnotenItem"><void property="typ"><string>Computer</string></void><void property="bounds"><object class="java.awt.Rectangle"><int>777</int><int>778</int><int>70</int><int>68</int></object></void></object></void><void property="self"><object idref="DecoderMetadata0"/></void></object>
+</java>

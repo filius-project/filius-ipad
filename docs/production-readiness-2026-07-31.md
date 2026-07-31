@@ -93,7 +93,19 @@ Baseline verification on the source development revision:
 - 392 XCTest tests passed, 0 failures
 - result bundle: `/Users/macbookairm2/FiliusTestArtifacts/2026-07-31-095654-3a65cbe-unit/results/unit.xcresult`
 
-The production tree must additionally pass its own repository validators, localization validation, unsigned Release build, privacy-manifest packaging check, and a fresh unit suite before its first push.
+Fresh verification of the curated production tree:
+
+- project tooling: 22 project tests and 4 CI tests passed;
+- localization: German, English, and French catalogs each contained 844 keys, with no validation errors;
+- repository readiness: passed in private/staging mode, with 44 intentional release-owner placeholders still reported;
+- GitHub Actions syntax and shell checks: passed with Actionlint 1.7.12;
+- secret scan: Gitleaks 8.30.1 scanned the repository and reported no leaks;
+- unsigned generic-device Release build: `** BUILD SUCCEEDED **`;
+- packaged privacy manifest: present in the built application and validated with `plutil`;
+- production unit suite: 392 XCTest tests passed, 0 failures;
+- production result bundle: `/Users/macbookairm2/FiliusTestArtifacts/2026-07-31-102551-064b200-unit/results/unit.xcresult`.
+
+The repository-mode checks establish a private production baseline; they do not override the legal, App Store ownership, signed-archive, privacy-approval, and metadata blockers above.
 
 ## Publication decision
 

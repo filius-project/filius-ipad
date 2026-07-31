@@ -2510,10 +2510,8 @@ final class TopologyProjectPersistenceTests: XCTestCase {
     }
 
     func testUnknownJavaApplicationAndArchivePayloadRoundTripWhileNativeEditsWin() throws {
-        let fixtureURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("parity/m012/s01/java-xmle-opaque-payload.xml")
+        let fixtureURL = repositoryRootURL(from: #filePath)
+            .appendingPathComponent("ios/FiliusPadTests/Fixtures/FLS/java-xmle-opaque-payload.xml")
         let imported = try TopologyProjectStore.importFiliusConfigurationXML(Data(contentsOf: fixtureURL))
         XCTAssertEqual(imported.state.graph.nodes.count, 2)
         XCTAssertEqual(imported.state.graph.links.count, 1)
@@ -3244,9 +3242,10 @@ final class TopologyProjectPersistenceTests: XCTestCase {
 
     private func loadRepositorySampleFLSArchive(named fileName: String, file: StaticString = #filePath) throws -> Data {
         let archiveURL = repositoryRootURL(from: file)
-            .appendingPathComponent("javaversion")
-            .appendingPathComponent("filius-master")
-            .appendingPathComponent("beispiele")
+            .appendingPathComponent("ios")
+            .appendingPathComponent("FiliusPadTests")
+            .appendingPathComponent("Fixtures")
+            .appendingPathComponent("FLS")
             .appendingPathComponent(fileName)
         return try Data(contentsOf: archiveURL, options: [.mappedIfSafe])
     }
