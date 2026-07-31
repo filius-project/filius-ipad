@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "productName": "Filius on iPad",
+  "platform": "iPadOS",
+  "bundleIdentifier": "com.filius.pad",
+  "marketingVersion": "1.0",
+  "buildNumber": "1",
+  "minimumOSVersion": "17.0",
+  "submissionSDKMinimum": "26.0",
+  "submissionRequirementEffectiveDate": "2026-04-28",
+  "sku": "TODO_RELEASE_OWNER_ASSIGN_SKU",
+  "primaryCategory": "Education",
+  "secondaryCategory": "Developer Tools",
+  "contentRights": "REVIEW_REQUIRED",
+  "ageRatingOwner": "Sören Schröder",
+  "copyright": "TODO_LEGAL_OWNER_APPROVE",
+  "supportURL": "https://filius.app/support/",
+  "marketingURL": "https://filius.app/",
+  "privacyPolicyURL": "https://filius.app/privacy/",
+  "reviewContact": {
+    "owner": "Sören Schröder",
+    "email": "support@filius.app",
+    "phone": "TODO_APP_STORE_CONNECT_ONLY"
+  },
+  "appStoreConnectAppId": "TODO_CREATED_BY_APPLE_ACCOUNT_OWNER",
+  "screenshotPlan": "TODO_LIST_REQUIRED_IPAD_DISPLAY_CLASSES",
+  "notes": "Tracked inventory only. Replace placeholders with approved non-secret values before release mode may pass."
+}

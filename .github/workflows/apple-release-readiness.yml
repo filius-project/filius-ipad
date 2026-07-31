@@ -1,0 +1,152 @@
+name: Apple Release Readiness (Unsigned Xcode 26)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "ios/**"
+      - "release/**"
+      - "docs/release/**"
+      - "scripts/project/**"
+      - ".github/workflows/apple-release-readiness.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-release-readiness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unsigned-xcode-26:
+    name: Unsigned Release compile on macOS 26 / Xcode 26+
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate readiness repository contracts
+        run: |
+          set -euo pipefail
+          python3 scripts/project/validate_project_readiness.py
+          python3 -m unittest discover -s scripts/project -p "test_*.py"
+
+      - name: Verify Xcode and iOS SDK submission floor
+        id: toolchain
+        run: |
+          set -euo pipefail
+          mkdir -p ios/build/release-readiness/reports ios/build/release-readiness/logs
+          xcodebuild -version | tee ios/build/release-readiness/logs/xcode-version.log
+          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
+          sdk_version="$(xcrun --sdk iphoneos --show-sdk-version)"
+          python3 scripts/project/verify_apple_release_toolchain.py \
+            --xcode-version "$xcode_version" \
+            --sdk-version "$sdk_version" \
+            --output ios/build/release-readiness/reports/toolchain.json
+          echo "xcode_version=$xcode_version" >> "$GITHUB_OUTPUT"
+          echo "sdk_version=$sdk_version" >> "$GITHUB_OUTPUT"
+
+      - name: Compile Release app for generic iOS device without signing
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          xcodebuild \
+            -project ios/FiliusPad.xcodeproj \
+            -scheme FiliusPad \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$PWD/ios/build/release-readiness/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            "CODE_SIGN_IDENTITY=" \
+            "DEVELOPMENT_TEAM=" \
+            build 2>&1 | tee ios/build/release-readiness/logs/xcodebuild-release.log
+
+      - name: Verify unsigned app identity
+        env:
+          GIT_COMMIT: ${{ github.sha }}
+          XCODE_VERSION: ${{ steps.toolchain.outputs.xcode_version }}
+          IOS_SDK_VERSION: ${{ steps.toolchain.outputs.sdk_version }}
+        run: |
+          set -euo pipefail
+          app="$PWD/ios/build/release-readiness/DerivedData/Build/Products/Release-iphoneos/FiliusPad.app"
+          plist="$app/Info.plist"
+          test -d "$app"
+          test -f "$plist"
+          if codesign --verify --deep --strict "$app" >/dev/null 2>&1; then
+            echo "Expected an unsigned app, but codesign verification succeeded." >&2
+            exit 1
+          fi
+
+          python3 scripts/project/verify_release_package.py \
+            --app "$app" \
+            --metadata release/app-store/app-metadata.json \
+            --report ios/build/release-readiness/reports/release-package.json
+          python3 ios/scripts/verify-project-document-contract.py \
+            --packaged-plist "$plist" \
+            --report ios/build/release-readiness/reports/project-document-contract.json
+
+          APP_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")"
+          APP_MARKETING_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")"
+          APP_BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")"
+          APP_MINIMUM_OS="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$plist")"
+          export APP_BUNDLE_ID APP_MARKETING_VERSION APP_BUILD_NUMBER APP_MINIMUM_OS
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = {
+              "commit": os.environ["GIT_COMMIT"],
+              "runner": "macos-26",
+              "xcodeVersion": os.environ["XCODE_VERSION"],
+              "iosSDKVersion": os.environ["IOS_SDK_VERSION"],
+              "configuration": "Release",
+              "destination": "generic/platform=iOS",
+              "bundleIdentifier": os.environ["APP_BUNDLE_ID"],
+              "marketingVersion": os.environ["APP_MARKETING_VERSION"],
+              "buildNumber": os.environ["APP_BUILD_NUMBER"],
+              "minimumOSVersion": os.environ["APP_MINIMUM_OS"],
+              "codeSigningAllowed": False,
+              "codeSigningVerified": False,
+              "appStoreUploadAttempted": False,
+              "testFlightUploadAttempted": False,
+          }
+          output = Path("ios/build/release-readiness/reports/unsigned-build.json")
+          output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(output.read_text(encoding="utf-8"))
+          PY
+
+      - name: Upload unsigned readiness evidence (GitHub artifact only)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: apple-release-readiness-${{ github.sha }}
+          path: |
+            ios/build/release-readiness/reports/
+            ios/build/release-readiness/logs/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Write readiness summary
+        if: always()
+        env:
+          XCODE_VERSION: ${{ steps.toolchain.outputs.xcode_version }}
+          IOS_SDK_VERSION: ${{ steps.toolchain.outputs.sdk_version }}
+        run: |
+          {
+            echo "## Apple release readiness — unsigned only"
+            echo
+            echo "- Runner: \`macos-26\`"
+            echo "- Xcode: \`${XCODE_VERSION:-not verified}\`"
+            echo "- iOS SDK: \`${IOS_SDK_VERSION:-not verified}\`"
+            echo "- Signing credentials available: \`false\`"
+            echo "- Signing attempted: \`false\`"
+            echo "- TestFlight/App Store upload attempted: \`false\`"
+            echo
+            echo "This workflow proves only unsigned Release compilation against the iOS 26-or-later SDK floor."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,49 @@
+name: Scoped task or readiness improvement
+description: Propose bounded documentation, automation, validation, or implementation work.
+title: "[Task] "
+labels:
+  - "enhancement"
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable behavior or a durable artifact, not instructions to run untrusted code.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: In scope
+      placeholder: "Files/surfaces and acceptance boundaries"
+    validations:
+      required: true
+  - type: textarea
+    id: excluded
+    attributes:
+      label: Explicitly out of scope
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] Observable criterion
+        - [ ] Verification command or protocol
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and risks
+      description: Include required approvals, hardware, credentials, or external state without disclosing secret values.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: This task can be evaluated without executing issue text or attachments and does not request elevated credentials or permissions.
+          required: true

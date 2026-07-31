@@ -1,0 +1,30 @@
+# Filius on iPad — Next Release
+
+Status: DRAFT
+Marketing version: 1.0
+Build number: 1
+Release commit/tag: TODO_AFTER_ACCEPTANCE
+
+## Highlights
+
+- TODO_USER_VISIBLE_HIGHLIGHTS
+
+## Compatibility
+
+- Requires iPadOS 17.0 or later.
+- TODO_SUPPORTED_DOCUMENT_COMPATIBILITY_AND_LIMITATIONS
+
+## Validation
+
+- TODO_LINK_UNSIGNED_IPA_ACCEPTANCE
+- TODO_LINK_XCODE_26_UNSIGNED_READINESS
+- TODO_LINK_REAL_IPAD_EVIDENCE
+- TODO_LINK_TESTFLIGHT_EVIDENCE
+
+## Known issues
+
+- TODO_LIST_ACCEPTED_KNOWN_ISSUES_OR_NONE
+
+## Privacy and data
+
+- TODO_APPROVED_USER_FACING_PRIVACY_SUMMARY

@@ -1,0 +1,192 @@
+{
+  "schemaVersion": 1,
+  "milestone": "M002",
+  "slice": "S01",
+  "iconMode": "default",
+  "javaResourceRoot": "javaversion/filius-master/src/main/resources",
+  "targetRoot": "ios/FiliusPad/TopologyEditor/Assets/JavaParity",
+  "assets": [
+    {
+      "id": "palette.cable",
+      "source": "gfx/hardware/kabel.png",
+      "target": "hardware/kabel.png",
+      "required": true,
+      "notes": "Palette cable tool icon"
+    },
+    {
+      "id": "palette.pc",
+      "source": "gfx/hardware/server.png",
+      "target": "hardware/server.png",
+      "required": true,
+      "notes": "Default-mode PC/server icon"
+    },
+    {
+      "id": "palette.notebook",
+      "source": "gfx/hardware/laptop.png",
+      "target": "hardware/laptop.png",
+      "required": true,
+      "notes": "Default-mode notebook icon"
+    },
+    {
+      "id": "palette.switch",
+      "source": "gfx/hardware/switch.png",
+      "target": "hardware/switch.png",
+      "required": true,
+      "notes": "Default-mode switch icon"
+    },
+    {
+      "id": "palette.router",
+      "source": "gfx/hardware/router.png",
+      "target": "hardware/router.png",
+      "required": true,
+      "notes": "Default-mode router icon"
+    },
+    {
+      "id": "palette.modem",
+      "source": "gfx/hardware/modem.png",
+      "target": "hardware/modem.png",
+      "required": true,
+      "notes": "Default-mode modem icon"
+    },
+    {
+      "id": "palette.gateway",
+      "source": "gfx/hardware/gateway.png",
+      "target": "hardware/gateway.png",
+      "required": true,
+      "notes": "Default-mode gateway icon"
+    },
+    {
+      "id": "canvas.switch.cloud",
+      "source": "gfx/hardware/cloud.png",
+      "target": "hardware/cloud.png",
+      "required": true,
+      "notes": "Cloud switch rendering variant"
+    },
+    {
+      "id": "canvas.connection.nic",
+      "source": "gfx/hardware/rj45.png",
+      "target": "hardware/rj45.png",
+      "required": false,
+      "notes": "NIC marker for future parity dialogs"
+    },
+    {
+      "id": "ui.mode.design",
+      "source": "gfx/allgemein/entwurfsmodus.png",
+      "target": "allgemein/entwurfsmodus.png",
+      "required": true,
+      "notes": "Design mode button"
+    },
+    {
+      "id": "ui.mode.design.active",
+      "source": "gfx/allgemein/entwurfsmodus_aktiv.png",
+      "target": "allgemein/entwurfsmodus_aktiv.png",
+      "required": true,
+      "notes": "Design mode active state"
+    },
+    {
+      "id": "ui.mode.action",
+      "source": "gfx/allgemein/aktionsmodus.png",
+      "target": "allgemein/aktionsmodus.png",
+      "required": true,
+      "notes": "Action mode button"
+    },
+    {
+      "id": "ui.mode.action.active",
+      "source": "gfx/allgemein/aktionsmodus_aktiv.png",
+      "target": "allgemein/aktionsmodus_aktiv.png",
+      "required": true,
+      "notes": "Action mode active state"
+    },
+    {
+      "id": "ui.toolbar.background",
+      "source": "gfx/allgemein/leisten_hg.png",
+      "target": "allgemein/leisten_hg.png",
+      "required": false,
+      "notes": "Toolbar background texture candidate"
+    },
+    {
+      "id": "ui.canvas.background",
+      "source": "gfx/allgemein/entwurfshg.png",
+      "target": "allgemein/entwurfshg.png",
+      "required": false,
+      "notes": "Canvas background texture candidate"
+    },
+    {
+      "id": "ui.selection.marker",
+      "source": "gfx/allgemein/markierung.png",
+      "target": "allgemein/markierung.png",
+      "required": false,
+      "notes": "Selection accent candidate"
+    },
+    {
+      "id": "desktop.background",
+      "source": "gfx/desktop/hintergrundbild.png",
+      "target": "desktop/hintergrundbild.png",
+      "required": false,
+      "notes": "Java desktop wallpaper for runtime PC view"
+    },
+    {
+      "id": "desktop.icon.installation",
+      "source": "gfx/desktop/icon_softwareinstallation.png",
+      "target": "desktop/icon_softwareinstallation.png",
+      "required": false,
+      "notes": "Software installation icon"
+    },
+    {
+      "id": "desktop.icon.terminal",
+      "source": "gfx/desktop/icon_terminal.png",
+      "target": "desktop/icon_terminal.png",
+      "required": false,
+      "notes": "Terminal app icon"
+    },
+    {
+      "id": "desktop.icon.filebrowser",
+      "source": "gfx/desktop/icon_filebrowser.png",
+      "target": "desktop/icon_filebrowser.png",
+      "required": false,
+      "notes": "File Explorer app icon"
+    },
+    {
+      "id": "desktop.icon.imageviewer",
+      "source": "gfx/desktop/icon_imageviewer.png",
+      "target": "desktop/icon_imageviewer.png",
+      "required": false,
+      "notes": "Image Viewer app icon"
+    },
+    {
+      "id": "desktop.icon.texteditor",
+      "source": "gfx/desktop/icon_texteditor.png",
+      "target": "desktop/icon_texteditor.png",
+      "required": false,
+      "notes": "Text Editor app icon"
+    },
+    {
+      "id": "desktop.icon.webserver",
+      "source": "gfx/desktop/icon_webserver.png",
+      "target": "desktop/icon_webserver.png",
+      "required": false,
+      "notes": "Web server app icon"
+    },
+    {
+      "id": "desktop.icon.firewall",
+      "source": "gfx/desktop/icon_firewall.png",
+      "target": "desktop/icon_firewall.png",
+      "required": false,
+      "notes": "Personal Firewall app icon"
+    },
+    {
+      "id": "desktop.icon.dns",
+      "source": "gfx/desktop/icon_dns.png",
+      "target": "desktop/icon_dns.png",
+      "required": false,
+      "notes": "DNS app icon"
+    },
+    {
+      "id": "desktop.icon.serverbaustein",
+      "source": "gfx/desktop/icon_serverbaustein.png",
+      "target": "desktop/icon_serverbaustein.png",
+      "required": false,
+      "notes": "Generic server building-block icon"
+    }
+  ]
+}

@@ -1,0 +1,1099 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<java version="1.6.0_22" class="java.beans.XMLDecoder">
+ <string>Filius version: 1.3.1.3 (29. Januar 2011)</string>
+ <object class="java.util.LinkedList">
+  <void method="add">
+   <object id="GUIKnotenItem0" class="filius.gui.netzwerksicht.GUIKnotenItem">
+    <void property="imageLabel">
+     <object class="filius.gui.netzwerksicht.JSidebarButton">
+      <void property="bounds">
+       <object class="java.awt.Rectangle">
+        <int>164</int>
+        <int>178</int>
+        <int>70</int>
+        <int>68</int>
+       </object>
+      </void>
+      <void property="hardwareTyp">
+       <string></string>
+      </void>
+      <void property="horizontalAlignment">
+       <int>0</int>
+      </void>
+      <void property="icon">
+       <object class="javax.swing.ImageIcon">
+        <string>jar:file:/usr/lib/filius/filius.jar!/gfx/hardware/switch.png</string>
+       </object>
+      </void>
+      <void property="text">
+       <string>Switch 1</string>
+      </void>
+     </object>
+    </void>
+    <void property="knoten">
+     <object class="filius.hardware.knoten.Switch">
+      <void property="name">
+       <string>Switch 1</string>
+      </void>
+      <void property="anschluesse">
+       <void id="Port0" index="0"/>
+       <void id="Port1" index="1"/>
+       <void id="Port2" index="2"/>
+      </void>
+     </object>
+    </void>
+   </object>
+  </void>
+  <void method="add">
+   <object id="GUIKnotenItem1" class="filius.gui.netzwerksicht.GUIKnotenItem">
+    <void property="imageLabel">
+     <object class="filius.gui.netzwerksicht.JSidebarButton">
+      <void property="bounds">
+       <object class="java.awt.Rectangle">
+        <int>612</int>
+        <int>104</int>
+        <int>70</int>
+        <int>68</int>
+       </object>
+      </void>
+      <void property="hardwareTyp">
+       <string></string>
+      </void>
+      <void property="horizontalAlignment">
+       <int>0</int>
+      </void>
+      <void property="icon">
+       <object class="javax.swing.ImageIcon">
+        <string>jar:file:/usr/lib/filius/filius.jar!/gfx/hardware/switch.png</string>
+       </object>
+      </void>
+      <void property="text">
+       <string>Switch 2</string>
+      </void>
+     </object>
+    </void>
+    <void property="knoten">
+     <object class="filius.hardware.knoten.Switch">
+      <void property="name">
+       <string>Switch 2</string>
+      </void>
+      <void property="anschluesse">
+       <void id="Port3" index="1"/>
+       <void id="Port4" index="0"/>
+      </void>
+     </object>
+    </void>
+   </object>
+  </void>
+  <void method="add">
+   <object id="GUIKnotenItem2" class="filius.gui.netzwerksicht.GUIKnotenItem">
+    <void property="imageLabel">
+     <object class="filius.gui.netzwerksicht.JSidebarButton">
+      <void property="bounds">
+       <object class="java.awt.Rectangle">
+        <int>694</int>
+        <int>19</int>
+        <int>108</int>
+        <int>110</int>
+       </object>
+      </void>
+      <void property="hardwareTyp">
+       <string></string>
+      </void>
+      <void property="horizontalAlignment">
+       <int>0</int>
+      </void>
+      <void property="icon">
+       <object class="javax.swing.ImageIcon">
+        <string>jar:file:/usr/lib/filius/filius.jar!/gfx/hardware/server.png</string>
+       </object>
+      </void>
+      <void property="text">
+       <string>DNS-Server 2.10</string>
+      </void>
+     </object>
+    </void>
+    <void property="knoten">
+     <object class="filius.hardware.knoten.Rechner">
+      <void property="name">
+       <string>DNS-Server 2.10</string>
+      </void>
+      <void property="netzwerkInterfaces">
+       <void index="0">
+        <void property="dns">
+         <string>141.99.2.10</string>
+        </void>
+        <void property="gateway">
+         <string>141.99.2.1</string>
+        </void>
+        <void property="ip">
+         <string>141.99.2.10</string>
+        </void>
+        <void property="mac">
+         <string>55:69:1F:18:4C:96</string>
+        </void>
+        <void id="Port5" property="port"/>
+       </void>
+      </void>
+      <void id="Betriebssystem0" property="systemSoftware">
+       <void property="DHCPServer">
+        <void property="name">
+         <string>Thread-16</string>
+        </void>
+        <void property="priority">
+         <int>5</int>
+        </void>
+       </void>
+       <void property="dateisystem">
+        <void property="arbeitsVerzeichnis">
+         <void method="add">
+          <object class="javax.swing.tree.DefaultMutableTreeNode">
+           <void property="userObject">
+            <string>dns</string>
+           </void>
+           <void method="add">
+            <object class="javax.swing.tree.DefaultMutableTreeNode">
+             <void property="userObject">
+              <object class="filius.software.system.Datei">
+               <void property="dateiInhalt">
+                <string>www.filius.de A 3600 141.99.2.10
+</string>
+               </void>
+               <void property="name">
+                <string>hosts</string>
+               </void>
+              </object>
+             </void>
+            </object>
+           </void>
+          </object>
+         </void>
+         <void method="add">
+          <object class="javax.swing.tree.DefaultMutableTreeNode">
+           <void property="userObject">
+            <string>webserver</string>
+           </void>
+           <void method="add">
+            <object class="javax.swing.tree.DefaultMutableTreeNode">
+             <void property="userObject">
+              <object class="filius.software.system.Datei">
+               <void property="dateiInhalt">
+                <string>&lt;html&gt;
+  &lt;head&gt;
+    &lt;title&gt;Standardseite&lt;/title&gt;
+  &lt;/head&gt;
+  &lt;body bgcolor=&quot;#ccccff&quot;&gt;
+    &lt;h2 align=&quot;center&quot;&gt; FILIUS - Webserver &lt;/h2&gt;
+
+    &lt;p&gt;Herzlich Willkommen auf dem Webserver der Anwendung FILIUS!&lt;/p&gt;
+
+    &lt;p&gt; Diese Seite wurde automatisch mit der Installation des 
+      Webservers eingerichtet, es lassen sich jedoch auch 
+      eigene Seiten hier unterbringen. &lt;/p&gt;
+
+    &lt;p align=&quot;center&quot;&gt; &lt;img src=&quot;splashscreen-mini.png&quot;&gt; &lt;/p&gt;
+
+    &lt;p&gt; Universit&amp;auml;t Siegen 2010 
+      (http://www.die.informatik.uni-siegen.de/pgfilius/)&lt;/p&gt;
+  &lt;/body&gt;
+&lt;/html&gt;
+</string>
+               </void>
+               <void property="dateiTyp">
+                <string>html</string>
+               </void>
+               <void property="name">
+                <string>index.html</string>
+               </void>
+              </object>
+             </void>
+            </object>
+           </void>
+           <void method="add">
+            <object class="javax.swing.tree.DefaultMutableTreeNode">
+             <void property="userObject">
+              <object class="filius.software.system.Datei">
+               <void property="dateiInhalt">
+                <string>iVBORw0KGgoAAAANSUhEUgAAAIAAAABgCAYAAADVenpJAAAAAXNSR0IArs4c6QAAAARnQU1BAACx
+jwv8YQUAAAAgY0hSTQAAeiYAAICEAAD6AAAAgOgAAHUwAADqYAAAOpgAABdwnLpRPAAAAB90RVh0
+U29mdHdhcmUATWFjcm9tZWRpYSBGaXJld29ya3MgOLVo0ngAABebSURBVHhe7Z13sFRFFsYvWori
+gjxWBNct1/3DUmuroAxlSWHABVRETCgiKKJEwUTSV4gYQAQREAXEQBITKGYUMbEqggkzSRRFBcWA
+GZBwdn6N39iO83jzZu69b3jcruq6M307nvP1Oafjrfb6669bkLjtlwJvvvmmJX77pUHwxhtvWBhe
+IAojr209D2iBZMVna0sx0SoIq/fT2FdeeSWRJr8zf9myZbZkyRIHgEwaz58/31599dWioFWwYMEC
+K9TTwEWLFhmO37nkN2/evJzj5pJfrnFee+01R/xc4+cTDwZv2LDBfvjhh7+URdm//vqrffvtt0Zd
+8sk/zDShAACUg3YBABD4og+CICGoOO/eeustF/edd95Jh/OOOH5cNZRw0kEw5aMwpaE8nzD8Jy/S
+CJQQ/5tvvrHvv//eSSviKD/Vzf+vNvj1UP18oCseaSmDOOvWrbPvvvsuXb5f308++cQ+/PDDtHTw
+2yfJ4LfFp4vihgWCAGYU6qmMAMBvCPLFF184qUBj169fb1999ZUjDgxZs2aNAwDMIJ6YRRx6zurV
+q1086sWT/++//77rUcRBenz99df27rvvuncQG5FLPqSBAR9//LErF2aLWNRn8+bNtnHjRvvyyy9d
+GtKLmYsXL3b5kl5t+uyzz9JAIe5vv/3meq/y9NtKnpT50ksvuacAANDJl/JgIHl+9NFHLl/aRb7k
+R/t++eUXe++999x/tYV8ocuqVascvZYuXZp+XyjvgrffftsK9T4AqBCMhgByn376qfu5YsUK9w7G
+42AmYfRGmEgjpUpgHATinRxhMBYCy/3000+OITjKJg154sgLguJefvll958yYCKEhPE4mAGoeIcD
+WCqXuuu36rd27VoXj7L8tvJ+5cqVNnfu3DQAXnzxRRd306ZNaYlEPNpCWkAnB4NRDzjqw3vogqOD
+iW4AgroXyjfShyIBqIwkgFBLxelpEEMMg+j0AAgsQvNfKgGxSKXEQAgv4kMciALYFAbjYSyMwEFM
+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
+QmCC</string>
+               </void>
+               <void property="dateiTyp">
+                <string>png</string>
+               </void>
+               <void property="name">
+                <string>splashscreen-mini.png</string>
+               </void>
+              </object>
+             </void>
+            </object>
+           </void>
+          </object>
+         </void>
+         <void method="add">
+          <object class="javax.swing.tree.DefaultMutableTreeNode">
+           <void property="userObject">
+            <string>www.conf</string>
+           </void>
+           <void method="add">
+            <object class="javax.swing.tree.DefaultMutableTreeNode">
+             <void property="userObject">
+              <object class="filius.software.system.Datei">
+               <void property="dateiInhalt">
+                <string>*
+webserver
+null
+null
+null
+null
+null
+null
+null
+null
+</string>
+               </void>
+               <void property="name">
+                <string>vhosts</string>
+               </void>
+              </object>
+             </void>
+            </object>
+           </void>
+          </object>
+         </void>
+        </void>
+       </void>
+       <void property="installierteAnwendungen">
+        <void method="put">
+         <string>filius.software.www.WebServer</string>
+         <object class="filius.software.www.WebServer">
+          <void property="aktiv">
+           <boolean>true</boolean>
+          </void>
+          <void property="name">
+           <string>Thread-333</string>
+          </void>
+          <void property="priority">
+           <int>5</int>
+          </void>
+          <void property="systemSoftware">
+           <object idref="Betriebssystem0"/>
+          </void>
+         </object>
+        </void>
+        <void method="put">
+         <string>filius.software.lokal.FileExplorer</string>
+         <object class="filius.software.lokal.FileExplorer">
+          <void property="name">
+           <string>Thread-335</string>
+          </void>
+          <void property="priority">
+           <int>5</int>
+          </void>
+          <void property="systemSoftware">
+           <object idref="Betriebssystem0"/>
+          </void>
+         </object>
+        </void>
+        <void method="put">
+         <string>filius.software.dns.DNSServer</string>
+         <object class="filius.software.dns.DNSServer">
+          <void property="aktiv">
+           <boolean>true</boolean>
+          </void>
+          <void property="name">
+           <string>Thread-148</string>
+          </void>
+          <void property="priority">
+           <int>5</int>
+          </void>
+          <void property="systemSoftware">
+           <object idref="Betriebssystem0"/>
+          </void>
+         </object>
+        </void>
+       </void>
+      </void>
+     </object>
+    </void>
+   </object>
+  </void>
+  <void method="add">
+   <object id="GUIKnotenItem3" class="filius.gui.netzwerksicht.GUIKnotenItem">
+    <void property="imageLabel">
+     <object class="filius.gui.netzwerksicht.JSidebarButton">
+      <void property="bounds">
+       <object class="java.awt.Rectangle">
+        <int>53</int>
+        <int>100</int>
+        <int>96</int>
+        <int>96</int>
+       </object>
+      </void>
+      <void property="hardwareTyp">
+       <string></string>
+      </void>
+      <void property="horizontalAlignment">
+       <int>0</int>
+      </void>
+      <void property="icon">
+       <object class="javax.swing.ImageIcon">
+        <string>jar:file:/usr/lib/filius/filius.jar!/gfx/hardware/laptop.png</string>
+       </object>
+      </void>
+      <void property="text">
+       <string>Notebook 1.10</string>
+      </void>
+     </object>
+    </void>
+    <void property="knoten">
+     <object class="filius.hardware.knoten.Notebook">
+      <void property="name">
+       <string>Notebook 1.10</string>
+      </void>
+      <void property="netzwerkInterfaces">
+       <void index="0">
+        <void property="dns">
+         <string>141.99.2.10</string>
+        </void>
+        <void property="gateway">
+         <string>141.99.1.1</string>
+        </void>
+        <void property="ip">
+         <string>141.99.1.10</string>
+        </void>
+        <void property="mac">
+         <string>95:11:22:49:65:CB</string>
+        </void>
+        <void id="Port6" property="port"/>
+       </void>
+      </void>
+      <void id="Betriebssystem1" property="systemSoftware">
+       <void property="DHCPServer">
+        <void property="name">
+         <string>Thread-18</string>
+        </void>
+        <void property="priority">
+         <int>5</int>
+        </void>
+       </void>
+       <void property="installierteAnwendungen">
+        <void method="put">
+         <string>filius.software.www.WebBrowser</string>
+         <object class="filius.software.www.WebBrowser">
+          <void property="name">
+           <string>Thread-150</string>
+          </void>
+          <void property="priority">
+           <int>5</int>
+          </void>
+          <void property="systemSoftware">
+           <object idref="Betriebssystem1"/>
+          </void>
+         </object>
+        </void>
+       </void>
+      </void>
+     </object>
+    </void>
+   </object>
+  </void>
+  <void method="add">
+   <object id="GUIKnotenItem4" class="filius.gui.netzwerksicht.GUIKnotenItem">
+    <void property="imageLabel">
+     <object class="filius.gui.netzwerksicht.JSidebarButton">
+      <void property="bounds">
+       <object class="java.awt.Rectangle">
+        <int>70</int>
+        <int>235</int>
+        <int>96</int>
+        <int>96</int>
+       </object>
+      </void>
+      <void property="hardwareTyp">
+       <string></string>
+      </void>
+      <void property="horizontalAlignment">
+       <int>0</int>
+      </void>
+      <void property="icon">
+       <object class="javax.swing.ImageIcon">
+        <string>jar:file:/usr/lib/filius/filius.jar!/gfx/hardware/laptop.png</string>
+       </object>
+      </void>
+      <void property="text">
+       <string>Notebook 1.11</string>
+      </void>
+     </object>
+    </void>
+    <void property="knoten">
+     <object class="filius.hardware.knoten.Notebook">
+      <void property="name">
+       <string>Notebook 1.11</string>
+      </void>
+      <void property="netzwerkInterfaces">
+       <void index="0">
+        <void property="dns">
+         <string>141.99.2.10</string>
+        </void>
+        <void property="ip">
+         <string>141.99.1.11</string>
+        </void>
+        <void property="mac">
+         <string>AE:F4:7A:63:81:B9</string>
+        </void>
+        <void id="Port7" property="port"/>
+       </void>
+      </void>
+      <void id="Betriebssystem2" property="systemSoftware">
+       <void property="DHCPServer">
+        <void property="name">
+         <string>Thread-20</string>
+        </void>
+        <void property="priority">
+         <int>5</int>
+        </void>
+       </void>
+       <void property="dateisystem">
+        <void property="arbeitsVerzeichnis">
+         <void method="add">
+          <object class="javax.swing.tree.DefaultMutableTreeNode">
+           <void property="userObject">
+            <string>webserver</string>
+           </void>
+           <void method="add">
+            <object class="javax.swing.tree.DefaultMutableTreeNode">
+             <void property="userObject">
+              <object class="filius.software.system.Datei">
+               <void property="dateiInhalt">
+                <string>&lt;html&gt;
+  &lt;head&gt;
+    &lt;title&gt;Standardseite&lt;/title&gt;
+  &lt;/head&gt;
+  &lt;body bgcolor=&quot;#ccccff&quot;&gt;
+    &lt;h2 align=&quot;center&quot;&gt; FILIUS - Webserver &lt;/h2&gt;
+
+    &lt;p&gt;Herzlich Willkommen auf dem Webserver der Anwendung FILIUS!&lt;/p&gt;
+
+    &lt;p&gt; Diese Seite wurde automatisch mit der installation des 
+      Webservers eingerichtet, es lassen sich jedoch auch 
+      eigene Seiten hier unterbringen. &lt;/p&gt;
+
+    &lt;p align=&quot;center&quot;&gt; &lt;img src=&quot;splashscreen-mini.png&quot;&gt; &lt;/p&gt;
+
+    &lt;p&gt; Universit&amp;auml;t Siegen 2008 
+      (http://www.die.informatik.uni-siegen.de/pgfilius/)&lt;/p&gt;
+  &lt;/body&gt;
+&lt;/html&gt;
+</string>
+               </void>
+               <void property="dateiTyp">
+                <string>html</string>
+               </void>
+               <void property="name">
+                <string>index.html</string>
+               </void>
+              </object>
+             </void>
+            </object>
+           </void>
+           <void method="add">
+            <object class="javax.swing.tree.DefaultMutableTreeNode">
+             <void property="userObject">
+              <object class="filius.software.system.Datei">
+               <void property="dateiInhalt">
+                <string>iVBORw0KGgoAAAANSUhEUgAAAIAAAABgCAYAAADVenpJAAAAAXNSR0IArs4c6QAAAARnQU1BAACx
+jwv8YQUAAAAgY0hSTQAAeiYAAICEAAD6AAAAgOgAAHUwAADqYAAAOpgAABdwnLpRPAAAAB90RVh0
+U29mdHdhcmUATWFjcm9tZWRpYSBGaXJld29ya3MgOLVo0ngAABebSURBVHhe7Z13sFRFFsYvWori
+gjxWBNct1/3DUmuroAxlSWHABVRETCgiKKJEwUTSV4gYQAQREAXEQBITKGYUMbEqggkzSRRFBcWA
+GZBwdn6N39iO83jzZu69b3jcruq6M307nvP1Oafjrfb6669bkLjtlwJvvvmmJX77pUHwxhtvWBhe
+IAojr209D2iBZMVna0sx0SoIq/fT2FdeeSWRJr8zf9myZbZkyRIHgEwaz58/31599dWioFWwYMEC
+K9TTwEWLFhmO37nkN2/evJzj5pJfrnFee+01R/xc4+cTDwZv2LDBfvjhh7+URdm//vqrffvtt0Zd
+8sk/zDShAACUg3YBABD4og+CICGoOO/eeustF/edd95Jh/OOOH5cNZRw0kEw5aMwpaE8nzD8Jy/S
+CJQQ/5tvvrHvv//eSSviKD/Vzf+vNvj1UP18oCseaSmDOOvWrbPvvvsuXb5f308++cQ+/PDDtHTw
+2yfJ4LfFp4vihgWCAGYU6qmMAMBvCPLFF184qUBj169fb1999ZUjDgxZs2aNAwDMIJ6YRRx6zurV
+q1086sWT/++//77rUcRBenz99df27rvvuncQG5FLPqSBAR9//LErF2aLWNRn8+bNtnHjRvvyyy9d
+GtKLmYsXL3b5kl5t+uyzz9JAIe5vv/3meq/y9NtKnpT50ksvuacAANDJl/JgIHl+9NFHLl/aRb7k
+R/t++eUXe++999x/tYV8ocuqVascvZYuXZp+XyjvgrffftsK9T4AqBCMhgByn376qfu5YsUK9w7G
+42AmYfRGmEgjpUpgHATinRxhMBYCy/3000+OITjKJg154sgLguJefvll958yYCKEhPE4mAGoeIcD
+WCqXuuu36rd27VoXj7L8tvJ+5cqVNnfu3DQAXnzxRRd306ZNaYlEPNpCWkAnB4NRDzjqw3vogqOD
+iW4AgroXyjfShyIBqIwkgFBLxelpEEMMg+j0AAgsQvNfKgGxSKXEQAgv4kMciALYFAbjYSyMwEFM
+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
+QmCC</string>
+               </void>
+               <void property="dateiTyp">
+                <string>png</string>
+               </void>
+               <void property="name">
+                <string>splashscreen-mini.png</string>
+               </void>
+              </object>
+             </void>
+            </object>
+           </void>
+          </object>
+         </void>
+         <void method="add">
+          <object class="javax.swing.tree.DefaultMutableTreeNode">
+           <void property="userObject">
+            <string>www.conf</string>
+           </void>
+           <void method="add">
+            <object class="javax.swing.tree.DefaultMutableTreeNode">
+             <void property="userObject">
+              <object class="filius.software.system.Datei">
+               <void property="dateiInhalt">
+                <string>null
+null
+null
+null
+null
+null
+null
+null
+null
+null
+</string>
+               </void>
+               <void property="name">
+                <string>vhosts</string>
+               </void>
+              </object>
+             </void>
+            </object>
+           </void>
+          </object>
+         </void>
+        </void>
+       </void>
+       <void property="installierteAnwendungen">
+        <void method="put">
+         <string>filius.software.www.WebServer</string>
+         <object class="filius.software.www.WebServer">
+          <void property="aktiv">
+           <boolean>true</boolean>
+          </void>
+          <void property="name">
+           <string>Thread-275</string>
+          </void>
+          <void property="priority">
+           <int>5</int>
+          </void>
+          <void property="systemSoftware">
+           <object idref="Betriebssystem2"/>
+          </void>
+         </object>
+        </void>
+        <void method="put">
+         <string>filius.software.www.WebBrowser</string>
+         <object class="filius.software.www.WebBrowser">
+          <void property="name">
+           <string>Thread-276</string>
+          </void>
+          <void property="priority">
+           <int>5</int>
+          </void>
+          <void property="systemSoftware">
+           <object idref="Betriebssystem2"/>
+          </void>
+         </object>
+        </void>
+       </void>
+      </void>
+     </object>
+    </void>
+   </object>
+  </void>
+  <void method="add">
+   <object id="GUIKnotenItem5" class="filius.gui.netzwerksicht.GUIKnotenItem">
+    <void property="imageLabel">
+     <object class="filius.gui.netzwerksicht.JSidebarButton">
+      <void property="bounds">
+       <object class="java.awt.Rectangle">
+        <int>373</int>
+        <int>106</int>
+        <int>161</int>
+        <int>83</int>
+       </object>
+      </void>
+      <void property="hardwareTyp">
+       <string></string>
+      </void>
+      <void property="horizontalAlignment">
+       <int>0</int>
+      </void>
+      <void property="icon">
+       <object class="javax.swing.ImageIcon">
+        <string>jar:file:/usr/lib/filius/filius.jar!/gfx/hardware/router.png</string>
+       </object>
+      </void>
+      <void property="text">
+       <string>Vermittlungsrechner</string>
+      </void>
+     </object>
+    </void>
+    <void property="knoten">
+     <object class="filius.hardware.knoten.Vermittlungsrechner">
+      <void property="netzwerkInterfaces">
+       <void index="0">
+        <void property="ip">
+         <string>141.99.1.1</string>
+        </void>
+        <void property="mac">
+         <string>A4:F4:2A:89:9F:E8</string>
+        </void>
+        <void id="Port8" property="port"/>
+       </void>
+       <void method="add">
+        <object class="filius.hardware.NetzwerkInterface">
+         <void property="ip">
+          <string>141.99.2.1</string>
+         </void>
+         <void property="mac">
+          <string>6D:B4:5B:F1:70:FC</string>
+         </void>
+         <void id="Port9" property="port"/>
+        </object>
+       </void>
+      </void>
+      <void property="systemSoftware">
+       <void property="dateisystem">
+        <void property="arbeitsVerzeichnis">
+         <void method="add">
+          <object class="javax.swing.tree.DefaultMutableTreeNode">
+           <void property="userObject">
+            <string>www.conf</string>
+           </void>
+           <void method="add">
+            <object class="javax.swing.tree.DefaultMutableTreeNode">
+             <void property="userObject">
+              <object class="filius.software.system.Datei">
+               <void property="dateiInhalt">
+                <string>null
+null
+null
+null
+null
+null
+null
+null
+null
+null
+</string>
+               </void>
+               <void property="name">
+                <string>vhosts</string>
+               </void>
+              </object>
+             </void>
+            </object>
+           </void>
+          </object>
+         </void>
+        </void>
+       </void>
+       <void property="installierteAnwendungen">
+        <void method="get">
+         <string>filius.software.www.WebServer</string>
+         <void property="aktiv">
+          <boolean>true</boolean>
+         </void>
+         <void property="name">
+          <string>Thread-207</string>
+         </void>
+         <void property="plugins">
+          <void method="get">
+           <string>konfig.html</string>
+           <void property="firewall">
+            <void property="name">
+             <string>Thread-206</string>
+            </void>
+            <void property="priority">
+             <int>5</int>
+            </void>
+           </void>
+          </void>
+         </void>
+         <void property="priority">
+          <int>5</int>
+         </void>
+        </void>
+       </void>
+      </void>
+     </object>
+    </void>
+   </object>
+  </void>
+ </object>
+ <object class="java.util.LinkedList">
+  <void method="add">
+   <object class="filius.gui.netzwerksicht.GUIKabelItem">
+    <void property="dasKabel">
+     <object class="filius.hardware.Kabel">
+      <void property="anschluesse">
+       <array class="filius.hardware.Port" length="2">
+        <void index="0">
+         <object idref="Port6"/>
+        </void>
+        <void index="1">
+         <object idref="Port0"/>
+        </void>
+       </array>
+      </void>
+     </object>
+    </void>
+    <void property="kabelpanel">
+     <void property="bounds">
+      <object class="java.awt.Rectangle">
+       <int>109</int>
+       <int>150</int>
+       <int>94</int>
+       <int>68</int>
+      </object>
+     </void>
+     <void property="ziel1">
+      <object idref="GUIKnotenItem3"/>
+     </void>
+     <void property="ziel2">
+      <object idref="GUIKnotenItem0"/>
+     </void>
+    </void>
+   </object>
+  </void>
+  <void method="add">
+   <object class="filius.gui.netzwerksicht.GUIKabelItem">
+    <void property="dasKabel">
+     <object class="filius.hardware.Kabel">
+      <void property="anschluesse">
+       <array class="filius.hardware.Port" length="2">
+        <void index="0">
+         <object idref="Port7"/>
+        </void>
+        <void index="1">
+         <object idref="Port1"/>
+        </void>
+       </array>
+      </void>
+     </object>
+    </void>
+    <void property="kabelpanel">
+     <void property="bounds">
+      <object class="java.awt.Rectangle">
+       <int>126</int>
+       <int>214</int>
+       <int>77</int>
+       <int>75</int>
+      </object>
+     </void>
+     <void property="ziel1">
+      <object idref="GUIKnotenItem4"/>
+     </void>
+     <void property="ziel2">
+      <object idref="GUIKnotenItem0"/>
+     </void>
+    </void>
+   </object>
+  </void>
+  <void method="add">
+   <object class="filius.gui.netzwerksicht.GUIKabelItem">
+    <void property="dasKabel">
+     <object class="filius.hardware.Kabel">
+      <void property="anschluesse">
+       <array class="filius.hardware.Port" length="2">
+        <void index="0">
+         <object idref="Port3"/>
+        </void>
+        <void index="1">
+         <object idref="Port5"/>
+        </void>
+       </array>
+      </void>
+     </object>
+    </void>
+    <void property="kabelpanel">
+     <void property="bounds">
+      <object class="java.awt.Rectangle">
+       <int>647</int>
+       <int>76</int>
+       <int>113</int>
+       <int>68</int>
+      </object>
+     </void>
+     <void property="ziel1">
+      <object idref="GUIKnotenItem1"/>
+     </void>
+     <void property="ziel2">
+      <object idref="GUIKnotenItem2"/>
+     </void>
+    </void>
+   </object>
+  </void>
+  <void method="add">
+   <object class="filius.gui.netzwerksicht.GUIKabelItem">
+    <void property="dasKabel">
+     <object class="filius.hardware.Kabel">
+      <void property="anschluesse">
+       <array class="filius.hardware.Port" length="2">
+        <void index="0">
+         <object idref="Port2"/>
+        </void>
+        <void index="1">
+         <object idref="Port8"/>
+        </void>
+       </array>
+      </void>
+     </object>
+    </void>
+    <void property="kabelpanel">
+     <void property="bounds">
+      <object class="java.awt.Rectangle">
+       <int>199</int>
+       <int>145</int>
+       <int>256</int>
+       <int>73</int>
+      </object>
+     </void>
+     <void property="ziel1">
+      <object idref="GUIKnotenItem0"/>
+     </void>
+     <void property="ziel2">
+      <object idref="GUIKnotenItem5"/>
+     </void>
+    </void>
+   </object>
+  </void>
+  <void method="add">
+   <object class="filius.gui.netzwerksicht.GUIKabelItem">
+    <void property="dasKabel">
+     <object class="filius.hardware.Kabel">
+      <void property="anschluesse">
+       <array class="filius.hardware.Port" length="2">
+        <void index="0">
+         <object idref="Port9"/>
+        </void>
+        <void index="1">
+         <object idref="Port4"/>
+        </void>
+       </array>
+      </void>
+     </object>
+    </void>
+    <void property="kabelpanel">
+     <void property="bounds">
+      <object class="java.awt.Rectangle">
+       <int>451</int>
+       <int>140</int>
+       <int>200</int>
+       <int>9</int>
+      </object>
+     </void>
+     <void property="ziel1">
+      <object idref="GUIKnotenItem5"/>
+     </void>
+     <void property="ziel2">
+      <object idref="GUIKnotenItem1"/>
+     </void>
+    </void>
+   </object>
+  </void>
+ </object>
+</java>

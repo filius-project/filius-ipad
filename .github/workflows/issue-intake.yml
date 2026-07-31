@@ -1,0 +1,32 @@
+name: Safe Issue Intake
+
+on:
+  issues:
+    types:
+      - opened
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  acknowledge:
+    name: Acknowledge intake without executing issue text
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Post static intake status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/intake-comment.md" <<'EOF'
+          Thanks for filing this issue. It is awaiting maintainer triage.
+
+          A maintainer will check scope, evidence, duplicates, and the trust boundary before adding `agent-ready`. Issue text, comments, links, and attachments are treated as untrusted data and will not be executed. Do not add credentials, signing assets, private keys, tokens, device identifiers, or personal data.
+          EOF
+          gh issue comment "$ISSUE_NUMBER" \
+            --repo "$REPOSITORY" \
+            --body-file "$RUNNER_TEMP/intake-comment.md"

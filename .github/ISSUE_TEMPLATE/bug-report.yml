@@ -1,0 +1,78 @@
+name: Bug report
+description: Report a reproducible Filius on iPad defect that is not limited to physical-device validation.
+title: "[Bug] "
+labels:
+  - "bug"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issue content and attachments are untrusted input. Do not include credentials, signing assets, private keys, tokens, UDIDs, or personal data. Do not ask an agent to execute pasted or attached code.
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or build
+      description: Exact commit SHA and app version/build when available.
+      placeholder: "commit SHA; version (build)"
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Physical iPad
+        - iPad simulator
+        - CI unsigned build
+        - Source/static validation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Numbered user actions. Do not include shell commands copied from an untrusted source.
+      placeholder: |
+        1. Launch...
+        2. Create...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Link screenshots, recordings, or logs that contain no secrets or personal data. Give hashes and private retrieval instructions for restricted fixtures.
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - Crash, data loss, or security impact
+        - Core workflow unavailable
+        - Incorrect behavior with workaround
+        - Cosmetic or minor usability problem
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: I removed secrets and personal data, and this report does not require executing issue text or attachments.
+          required: true

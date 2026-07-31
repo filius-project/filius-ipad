@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "releaseBinaryReviewed": false,
+  "usesEncryption": "REVIEW_REQUIRED",
+  "exemptionApplies": "REVIEW_REQUIRED",
+  "nonExemptDocumentationRequired": "REVIEW_REQUIRED",
+  "infoPlistDeclaration": "REVIEW_REQUIRED",
+  "classificationReference": "TODO_IF_REQUIRED",
+  "owner": "TODO_ASSIGN_EXPORT_COMPLIANCE_OWNER",
+  "decisionDate": "TODO_YYYY_MM_DD",
+  "rationale": "TODO_BINARY_AND_DEPENDENCY_BASED_RATIONALE",
+  "evidence": "TODO_LINK_PRIVATE_APPROVAL_RECORD"
+}

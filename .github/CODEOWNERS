@@ -1,0 +1,8 @@
+# Production code and release configuration require maintainer review.
+* @Borega
+
+# Apple release and legal material are especially sensitive.
+/ios/ @Borega
+/release/ @Borega
+/docs/legal/ @Borega
+/.github/workflows/ @Borega

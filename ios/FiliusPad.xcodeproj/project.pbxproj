@@ -1,0 +1,765 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A16600000000000000000001 /* TopologyEditorUndoCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000055 /* TopologyEditorUndoCoordinator.swift */; };
+		A16500000000000000000001 /* TopologyParityAssetLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000054 /* TopologyParityAssetLoader.swift */; };
+		A24000000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A23000000000000000000001 /* Assets.xcassets */; };
+		F10000000000000000000001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000002 /* PrivacyInfo.xcprivacy */; };
+		A16200000000000000000001 /* TopologyGnutella.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000051 /* TopologyGnutella.swift */; };
+		A16300000000000000000001 /* TopologyRuntimeGnutella.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000052 /* TopologyRuntimeGnutella.swift */; };
+		A16400000000000000000001 /* TopologyGnutellaAppView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000053 /* TopologyGnutellaAppView.swift */; };
+		C0F100000000000000000003 /* FiliusProjectDocumentTypeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F100000000000000000002 /* FiliusProjectDocumentTypeTests.swift */; };
+		A16100000000000000000001 /* TopologyEmailAppViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000050 /* TopologyEmailAppViews.swift */; };
+		A16000000000000000000001 /* TopologyEmail.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000049 /* TopologyEmail.swift */; };
+		A15900000000000000000001 /* TopologyProtocolApplicationBuilderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000048 /* TopologyProtocolApplicationBuilderView.swift */; };
+		A15800000000000000000001 /* TopologyProtocolApplication.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000047 /* TopologyProtocolApplication.swift */; };
+		A15600000000000000000001 /* FiliusLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000046 /* FiliusLocalization.swift */; };
+		A15700000000000000000001 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A22000000000000000000001 /* Localizable.strings */; };
+		A11100000000000000000001 /* FiliusPadApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000001 /* FiliusPadApp.swift */; };
+		A11200000000000000000001 /* TopologyNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000002 /* TopologyNode.swift */; };
+		A11300000000000000000001 /* TopologyLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000003 /* TopologyLink.swift */; };
+		A11400000000000000000001 /* TopologyGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000004 /* TopologyGraph.swift */; };
+		A11500000000000000000001 /* TopologyEditorState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000005 /* TopologyEditorState.swift */; };
+		A14800000000000000000001 /* TopologyVirtualFileSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000038 /* TopologyVirtualFileSystem.swift */; };
+		A11600000000000000000001 /* TopologyEditorReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000006 /* TopologyEditorReducerTests.swift */; };
+		A11700000000000000000001 /* FiliusPadUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000007 /* FiliusPadUITests.swift */; };
+		C01300000000000000000001 /* TopologyVisualRegressionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C01300000000000000000002 /* TopologyVisualRegressionUITests.swift */; };
+		A11800000000000000000001 /* TopologyEditorReducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000008 /* TopologyEditorReducer.swift */; };
+		A11900000000000000000001 /* TopologyValidationError.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000009 /* TopologyValidationError.swift */; };
+		A12000000000000000000001 /* TopologyEditorDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000010 /* TopologyEditorDiagnosticsTests.swift */; };
+		A12100000000000000000001 /* TopologyEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000011 /* TopologyEditorView.swift */; };
+		A12200000000000000000001 /* TopologyCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000012 /* TopologyCanvasView.swift */; };
+		A12300000000000000000001 /* TopologyPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000013 /* TopologyPaletteView.swift */; };
+		A12400000000000000000001 /* ViewportTransform.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000014 /* ViewportTransform.swift */; };
+		A12500000000000000000001 /* ViewportTransformTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000015 /* ViewportTransformTests.swift */; };
+		A12600000000000000000001 /* TopologyDebugOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000016 /* TopologyDebugOverlayView.swift */; };
+		A12700000000000000000001 /* TopologyEditorTouchFlowUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000017 /* TopologyEditorTouchFlowUITests.swift */; };
+		A12800000000000000000001 /* TopologySimulationRuntimeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000018 /* TopologySimulationRuntimeUITests.swift */; };
+		A12900000000000000000001 /* TopologyRuntimeDeviceSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000019 /* TopologyRuntimeDeviceSheet.swift */; };
+		A13000000000000000000001 /* TopologyRuntimePingWorkflowUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000020 /* TopologyRuntimePingWorkflowUITests.swift */; };
+		A13100000000000000000001 /* TopologyProjectEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000021 /* TopologyProjectEnvelope.swift */; };
+		A13200000000000000000001 /* TopologyProjectSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000022 /* TopologyProjectSnapshot.swift */; };
+		A13300000000000000000001 /* TopologyProjectStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000023 /* TopologyProjectStore.swift */; };
+		A13400000000000000000001 /* TopologyProjectPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000024 /* TopologyProjectPersistenceTests.swift */; };
+		A13500000000000000000001 /* TopologyProjectPersistenceWorkflowUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000025 /* TopologyProjectPersistenceWorkflowUITests.swift */; };
+		A13600000000000000000001 /* TopologyIntegratedAcceptanceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000026 /* TopologyIntegratedAcceptanceUITests.swift */; };
+		A13700000000000000000001 /* JavaParity in Resources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000027 /* JavaParity */; };
+		A13800000000000000000001 /* TopologyRuntimeAppLaunchParityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000028 /* TopologyRuntimeAppLaunchParityUITests.swift */; };
+		A13900000000000000000001 /* TopologyRuntimeServiceAppParityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000029 /* TopologyRuntimeServiceAppParityUITests.swift */; };
+        A14000000000000000000001 /* TopologyRuntimeDesktopSuiteParityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000030 /* TopologyRuntimeDesktopSuiteParityUITests.swift */; };
+        A14100000000000000000001 /* TopologyInfrastructureParityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000031 /* TopologyInfrastructureParityUITests.swift */; };
+        A14200000000000000000001 /* TopologyNetworkRuntimeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000032 /* TopologyNetworkRuntimeEngine.swift */; };
+        A14300000000000000000001 /* TopologyNetworkRuntimeEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000033 /* TopologyNetworkRuntimeEngineTests.swift */; };
+        A14400000000000000000001 /* TopologyJavaRouteTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000034 /* TopologyJavaRouteTable.swift */; };
+        A14500000000000000000001 /* TopologyJavaRouteTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000035 /* TopologyJavaRouteTableView.swift */; };
+        A14600000000000000000001 /* TopologyJavaRouteTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000036 /* TopologyJavaRouteTableTests.swift */; };
+        A14700000000000000000001 /* TopologyFLSArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000037 /* TopologyFLSArchive.swift */; };
+		E39E5903BA3452C9B963CA78 /* TopologyFLSOpaqueXML.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05A4FB5428C7D9AF7EF0B6ED /* TopologyFLSOpaqueXML.swift */; };
+        A14900000000000000000001 /* TopologyRuntimeSimpleClientEcho.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000039 /* TopologyRuntimeSimpleClientEcho.swift */; };
+        A15000000000000000000001 /* TopologyDocumentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000040 /* TopologyDocumentation.swift */; };
+        A15100000000000000000001 /* TopologyDocumentationSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000041 /* TopologyDocumentationSnapshot.swift */; };
+        A15200000000000000000001 /* TopologyDocumentationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000042 /* TopologyDocumentationView.swift */; };
+        A15300000000000000000001 /* TopologyDocumentationReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000043 /* TopologyDocumentationReport.swift */; };
+        A15400000000000000000001 /* TopologyProductShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000044 /* TopologyProductShell.swift */; };
+        A15500000000000000000001 /* TopologyProductShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000045 /* TopologyProductShellView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A71100000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A81100000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A51100000000000000000001;
+			remoteInfo = FiliusPad;
+		};
+		A71200000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A81100000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A51100000000000000000001;
+			remoteInfo = FiliusPad;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A21200000000000000000055 /* TopologyEditorUndoCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyEditorUndoCoordinator.swift; sourceTree = "<group>"; };
+		A21200000000000000000054 /* TopologyParityAssetLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyParityAssetLoader.swift; sourceTree = "<group>"; };
+		A23000000000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A21200000000000000000051 /* TopologyGnutella.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyGnutella.swift; sourceTree = "<group>"; };
+		A21200000000000000000052 /* TopologyRuntimeGnutella.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyRuntimeGnutella.swift; sourceTree = "<group>"; };
+		A21200000000000000000053 /* TopologyGnutellaAppView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyGnutellaAppView.swift; sourceTree = "<group>"; };
+		C0F100000000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F10000000000000000000002 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		C0F100000000000000000002 /* FiliusProjectDocumentTypeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FiliusProjectDocumentTypeTests.swift; sourceTree = "<group>"; };
+		A21200000000000000000050 /* TopologyEmailAppViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyEmailAppViews.swift; sourceTree = "<group>"; };
+		A21200000000000000000049 /* TopologyEmail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyEmail.swift; sourceTree = "<group>"; };
+		A21200000000000000000048 /* TopologyProtocolApplicationBuilderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyProtocolApplicationBuilderView.swift; sourceTree = "<group>"; };
+		A21200000000000000000047 /* TopologyProtocolApplication.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyProtocolApplication.swift; sourceTree = "<group>"; };
+		A21200000000000000000046 /* FiliusLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FiliusLocalization.swift; sourceTree = "<group>"; };
+		A22100000000000000000001 /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plain; name = de; path = de.lproj/Localizable.strings; sourceTree = "<group>"; };
+		A22200000000000000000001 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plain; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		A22300000000000000000001 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plain; name = fr; path = fr.lproj/Localizable.strings; sourceTree = "<group>"; };
+		A21200000000000000000001 /* FiliusPadApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FiliusPadApp.swift; sourceTree = "<group>"; };
+		A21200000000000000000002 /* TopologyNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyNode.swift; sourceTree = "<group>"; };
+		A21200000000000000000003 /* TopologyLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyLink.swift; sourceTree = "<group>"; };
+		A21200000000000000000004 /* TopologyGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyGraph.swift; sourceTree = "<group>"; };
+		A21200000000000000000005 /* TopologyEditorState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyEditorState.swift; sourceTree = "<group>"; };
+		A21200000000000000000038 /* TopologyVirtualFileSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyVirtualFileSystem.swift; sourceTree = "<group>"; };
+		A21200000000000000000006 /* TopologyEditorReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyEditorReducerTests.swift; sourceTree = "<group>"; };
+		A21200000000000000000007 /* FiliusPadUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FiliusPadUITests.swift; sourceTree = "<group>"; };
+		C01300000000000000000002 /* TopologyVisualRegressionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyVisualRegressionUITests.swift; sourceTree = "<group>"; };
+		A21200000000000000000008 /* TopologyEditorReducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyEditorReducer.swift; sourceTree = "<group>"; };
+		A21200000000000000000009 /* TopologyValidationError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyValidationError.swift; sourceTree = "<group>"; };
+		A21200000000000000000010 /* TopologyEditorDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyEditorDiagnosticsTests.swift; sourceTree = "<group>"; };
+		A21200000000000000000011 /* TopologyEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyEditorView.swift; sourceTree = "<group>"; };
+		A21200000000000000000012 /* TopologyCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyCanvasView.swift; sourceTree = "<group>"; };
+		A21200000000000000000013 /* TopologyPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyPaletteView.swift; sourceTree = "<group>"; };
+		A21200000000000000000014 /* ViewportTransform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewportTransform.swift; sourceTree = "<group>"; };
+		A21200000000000000000015 /* ViewportTransformTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewportTransformTests.swift; sourceTree = "<group>"; };
+		A21200000000000000000016 /* TopologyDebugOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyDebugOverlayView.swift; sourceTree = "<group>"; };
+		A21200000000000000000017 /* TopologyEditorTouchFlowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyEditorTouchFlowUITests.swift; sourceTree = "<group>"; };
+		A21200000000000000000018 /* TopologySimulationRuntimeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologySimulationRuntimeUITests.swift; sourceTree = "<group>"; };
+		A21200000000000000000019 /* TopologyRuntimeDeviceSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyRuntimeDeviceSheet.swift; sourceTree = "<group>"; };
+		A21200000000000000000020 /* TopologyRuntimePingWorkflowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyRuntimePingWorkflowUITests.swift; sourceTree = "<group>"; };
+		A21200000000000000000021 /* TopologyProjectEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyProjectEnvelope.swift; sourceTree = "<group>"; };
+		A21200000000000000000022 /* TopologyProjectSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyProjectSnapshot.swift; sourceTree = "<group>"; };
+		A21200000000000000000023 /* TopologyProjectStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyProjectStore.swift; sourceTree = "<group>"; };
+		A21200000000000000000024 /* TopologyProjectPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyProjectPersistenceTests.swift; sourceTree = "<group>"; };
+		A21200000000000000000025 /* TopologyProjectPersistenceWorkflowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyProjectPersistenceWorkflowUITests.swift; sourceTree = "<group>"; };
+		A21200000000000000000026 /* TopologyIntegratedAcceptanceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyIntegratedAcceptanceUITests.swift; sourceTree = "<group>"; };
+		A21200000000000000000027 /* JavaParity */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Assets/JavaParity; sourceTree = "<group>"; };
+		A21200000000000000000028 /* TopologyRuntimeAppLaunchParityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyRuntimeAppLaunchParityUITests.swift; sourceTree = "<group>"; };
+		A21200000000000000000029 /* TopologyRuntimeServiceAppParityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyRuntimeServiceAppParityUITests.swift; sourceTree = "<group>"; };
+        A21200000000000000000030 /* TopologyRuntimeDesktopSuiteParityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyRuntimeDesktopSuiteParityUITests.swift; sourceTree = "<group>"; };
+        A21200000000000000000031 /* TopologyInfrastructureParityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyInfrastructureParityUITests.swift; sourceTree = "<group>"; };
+        A21200000000000000000032 /* TopologyNetworkRuntimeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyNetworkRuntimeEngine.swift; sourceTree = "<group>"; };
+        A21200000000000000000033 /* TopologyNetworkRuntimeEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyNetworkRuntimeEngineTests.swift; sourceTree = "<group>"; };
+        A21200000000000000000034 /* TopologyJavaRouteTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyJavaRouteTable.swift; sourceTree = "<group>"; };
+        A21200000000000000000035 /* TopologyJavaRouteTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyJavaRouteTableView.swift; sourceTree = "<group>"; };
+        A21200000000000000000036 /* TopologyJavaRouteTableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyJavaRouteTableTests.swift; sourceTree = "<group>"; };
+        A21200000000000000000037 /* TopologyFLSArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyFLSArchive.swift; sourceTree = "<group>"; };
+		05A4FB5428C7D9AF7EF0B6ED /* TopologyFLSOpaqueXML.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyFLSOpaqueXML.swift; sourceTree = "<group>"; };
+        A21200000000000000000039 /* TopologyRuntimeSimpleClientEcho.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyRuntimeSimpleClientEcho.swift; sourceTree = "<group>"; };
+		A21300000000000000000001 /* FiliusPad.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FiliusPad.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A21300000000000000000002 /* FiliusPadTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FiliusPadTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A21300000000000000000003 /* FiliusPadUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FiliusPadUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A21200000000000000000040 /* TopologyDocumentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyDocumentation.swift; sourceTree = "<group>"; };
+		A21200000000000000000041 /* TopologyDocumentationSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyDocumentationSnapshot.swift; sourceTree = "<group>"; };
+		A21200000000000000000042 /* TopologyDocumentationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyDocumentationView.swift; sourceTree = "<group>"; };
+		A21200000000000000000043 /* TopologyDocumentationReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyDocumentationReport.swift; sourceTree = "<group>"; };
+		A21200000000000000000044 /* TopologyProductShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyProductShell.swift; sourceTree = "<group>"; };
+		A21200000000000000000045 /* TopologyProductShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyProductShellView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXVariantGroup section */
+		A22000000000000000000001 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				A22100000000000000000001 /* de */,
+				A22200000000000000000001 /* en */,
+				A22300000000000000000001 /* fr */,
+			);
+			name = Localizable.strings;
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A41200000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A41500000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A41800000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A31100000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				A31200000000000000000001 /* FiliusPad */,
+				A31700000000000000000001 /* FiliusPadTests */,
+				A31800000000000000000001 /* FiliusPadUITests */,
+				A31900000000000000000001 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A31200000000000000000001 /* FiliusPad */ = {
+			isa = PBXGroup;
+			path = FiliusPad;
+			sourceTree = "<group>";
+			children = (
+				A23000000000000000000001 /* Assets.xcassets */,
+				C0F100000000000000000001 /* Info.plist */,
+				F10000000000000000000002 /* PrivacyInfo.xcprivacy */,
+				A21200000000000000000001 /* FiliusPadApp.swift */,
+				A31400000000000000000001 /* TopologyEditor */,
+				A34000000000000000000001 /* Localization */,
+				A22000000000000000000001 /* Localizable.strings */,
+			);
+		};
+		A34000000000000000000001 /* Localization */ = {
+			isa = PBXGroup;
+			path = Localization;
+			sourceTree = "<group>";
+			children = (
+				A21200000000000000000046 /* FiliusLocalization.swift */,
+			);
+		};
+		A31400000000000000000001 /* TopologyEditor */ = {
+			isa = PBXGroup;
+			path = TopologyEditor;
+			sourceTree = "<group>";
+			children = (
+				A31500000000000000000001 /* Model */,
+				A31600000000000000000001 /* State */,
+				A32100000000000000000001 /* Persistence */,
+				A32000000000000000000001 /* View */,
+				A21200000000000000000027 /* JavaParity */,
+			);
+		};
+		A31500000000000000000001 /* Model */ = {
+			isa = PBXGroup;
+			path = Model;
+			sourceTree = "<group>";
+			children = (
+				A21200000000000000000002 /* TopologyNode.swift */,
+				A21200000000000000000003 /* TopologyLink.swift */,
+				A21200000000000000000004 /* TopologyGraph.swift */,
+				A21200000000000000000040 /* TopologyDocumentation.swift */,
+				A21200000000000000000009 /* TopologyValidationError.swift */,
+				A21200000000000000000014 /* ViewportTransform.swift */,
+			);
+		};
+		A31600000000000000000001 /* State */ = {
+			isa = PBXGroup;
+			path = State;
+			sourceTree = "<group>";
+			children = (
+				A21200000000000000000005 /* TopologyEditorState.swift */,
+				A21200000000000000000038 /* TopologyVirtualFileSystem.swift */,
+                A21200000000000000000032 /* TopologyNetworkRuntimeEngine.swift */,
+                A21200000000000000000034 /* TopologyJavaRouteTable.swift */,
+                A21200000000000000000039 /* TopologyRuntimeSimpleClientEcho.swift */,
+                A21200000000000000000047 /* TopologyProtocolApplication.swift */,
+                A21200000000000000000049 /* TopologyEmail.swift */,
+                A21200000000000000000051 /* TopologyGnutella.swift */,
+                A21200000000000000000052 /* TopologyRuntimeGnutella.swift */,
+				A21200000000000000000044 /* TopologyProductShell.swift */,
+				A21200000000000000000008 /* TopologyEditorReducer.swift */,
+			);
+		};
+		A32100000000000000000001 /* Persistence */ = {
+			isa = PBXGroup;
+			path = Persistence;
+			sourceTree = "<group>";
+			children = (
+				A21200000000000000000021 /* TopologyProjectEnvelope.swift */,
+				A21200000000000000000022 /* TopologyProjectSnapshot.swift */,
+				A21200000000000000000041 /* TopologyDocumentationSnapshot.swift */,
+				A21200000000000000000023 /* TopologyProjectStore.swift */,
+				A21200000000000000000037 /* TopologyFLSArchive.swift */,
+				05A4FB5428C7D9AF7EF0B6ED /* TopologyFLSOpaqueXML.swift */,
+			);
+		};
+		A32000000000000000000001 /* View */ = {
+			isa = PBXGroup;
+			path = View;
+			sourceTree = "<group>";
+			children = (
+				A21200000000000000000011 /* TopologyEditorView.swift */,
+				A21200000000000000000055 /* TopologyEditorUndoCoordinator.swift */,
+				A21200000000000000000012 /* TopologyCanvasView.swift */,
+				A21200000000000000000013 /* TopologyPaletteView.swift */,
+				A21200000000000000000054 /* TopologyParityAssetLoader.swift */,
+				A21200000000000000000048 /* TopologyProtocolApplicationBuilderView.swift */,
+				A21200000000000000000050 /* TopologyEmailAppViews.swift */,
+				A21200000000000000000053 /* TopologyGnutellaAppView.swift */,
+				A21200000000000000000042 /* TopologyDocumentationView.swift */,
+				A21200000000000000000043 /* TopologyDocumentationReport.swift */,
+				A21200000000000000000045 /* TopologyProductShellView.swift */,
+				A21200000000000000000016 /* TopologyDebugOverlayView.swift */,
+				A21200000000000000000019 /* TopologyRuntimeDeviceSheet.swift */,
+                A21200000000000000000035 /* TopologyJavaRouteTableView.swift */,
+			);
+		};
+		A31700000000000000000001 /* FiliusPadTests */ = {
+			isa = PBXGroup;
+			path = FiliusPadTests;
+			sourceTree = "<group>";
+			children = (
+				A21200000000000000000006 /* TopologyEditorReducerTests.swift */,
+				A21200000000000000000010 /* TopologyEditorDiagnosticsTests.swift */,
+				A21200000000000000000015 /* ViewportTransformTests.swift */,
+				A21200000000000000000024 /* TopologyProjectPersistenceTests.swift */,
+				C0F100000000000000000002 /* FiliusProjectDocumentTypeTests.swift */,
+                A21200000000000000000033 /* TopologyNetworkRuntimeEngineTests.swift */,
+                A21200000000000000000036 /* TopologyJavaRouteTableTests.swift */,
+			);
+		};
+		A31800000000000000000001 /* FiliusPadUITests */ = {
+			isa = PBXGroup;
+			path = FiliusPadUITests;
+			sourceTree = "<group>";
+			children = (
+				A21200000000000000000007 /* FiliusPadUITests.swift */,
+				C01300000000000000000002 /* TopologyVisualRegressionUITests.swift */,
+				A21200000000000000000017 /* TopologyEditorTouchFlowUITests.swift */,
+				A21200000000000000000018 /* TopologySimulationRuntimeUITests.swift */,
+				A21200000000000000000020 /* TopologyRuntimePingWorkflowUITests.swift */,
+				A21200000000000000000025 /* TopologyProjectPersistenceWorkflowUITests.swift */,
+				A21200000000000000000026 /* TopologyIntegratedAcceptanceUITests.swift */,
+				A21200000000000000000028 /* TopologyRuntimeAppLaunchParityUITests.swift */,
+				A21200000000000000000029 /* TopologyRuntimeServiceAppParityUITests.swift */,
+                A21200000000000000000030 /* TopologyRuntimeDesktopSuiteParityUITests.swift */,
+                A21200000000000000000031 /* TopologyInfrastructureParityUITests.swift */,
+			);
+		};
+		A31900000000000000000001 /* Products */ = {
+			isa = PBXGroup;
+			name = Products;
+			sourceTree = "<group>";
+			children = (
+				A21300000000000000000001 /* FiliusPad.app */,
+				A21300000000000000000002 /* FiliusPadTests.xctest */,
+				A21300000000000000000003 /* FiliusPadUITests.xctest */,
+			);
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A51100000000000000000001 /* FiliusPad */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A61200000000000000000001 /* Build configuration list for PBXNativeTarget "FiliusPad" */;
+			buildPhases = (
+				A41100000000000000000001 /* Sources */,
+				A41200000000000000000001 /* Frameworks */,
+				A41300000000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FiliusPad;
+			productName = FiliusPad;
+			productReference = A21300000000000000000001 /* FiliusPad.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A51200000000000000000001 /* FiliusPadTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A61300000000000000000001 /* Build configuration list for PBXNativeTarget "FiliusPadTests" */;
+			buildPhases = (
+				A41400000000000000000001 /* Sources */,
+				A41500000000000000000001 /* Frameworks */,
+				A41600000000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A72100000000000000000001 /* PBXTargetDependency */,
+			);
+			name = FiliusPadTests;
+			productName = FiliusPadTests;
+			productReference = A21300000000000000000002 /* FiliusPadTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A51300000000000000000001 /* FiliusPadUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A61400000000000000000001 /* Build configuration list for PBXNativeTarget "FiliusPadUITests" */;
+			buildPhases = (
+				A41700000000000000000001 /* Sources */,
+				A41800000000000000000001 /* Frameworks */,
+				A41900000000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A72200000000000000000001 /* PBXTargetDependency */,
+			);
+			name = FiliusPadUITests;
+			productName = FiliusPadUITests;
+			productReference = A21300000000000000000003 /* FiliusPadUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A81100000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					A51100000000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					A51200000000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = A51100000000000000000001;
+					};
+					A51300000000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = A51100000000000000000001;
+					};
+				};
+			};
+			buildConfigurationList = A61100000000000000000001 /* Build configuration list for PBXProject "FiliusPad" */;
+			compatibilityVersion = "Xcode 15.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				de,
+				fr,
+				Base,
+			);
+			mainGroup = A31100000000000000000001;
+			productRefGroup = A31900000000000000000001 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A51100000000000000000001 /* FiliusPad */,
+				A51200000000000000000001 /* FiliusPadTests */,
+				A51300000000000000000001 /* FiliusPadUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A41300000000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A24000000000000000000001 /* Assets.xcassets in Resources */,
+				F10000000000000000000001 /* PrivacyInfo.xcprivacy in Resources */,
+				A13700000000000000000001 /* JavaParity in Resources */,
+				A15700000000000000000001 /* Localizable.strings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A41600000000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A41900000000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A41100000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A15600000000000000000001 /* FiliusLocalization.swift in Sources */,
+				A11100000000000000000001 /* FiliusPadApp.swift in Sources */,
+				A11200000000000000000001 /* TopologyNode.swift in Sources */,
+				A11300000000000000000001 /* TopologyLink.swift in Sources */,
+				A11400000000000000000001 /* TopologyGraph.swift in Sources */,
+				A15000000000000000000001 /* TopologyDocumentation.swift in Sources */,
+				A15100000000000000000001 /* TopologyDocumentationSnapshot.swift in Sources */,
+				A15200000000000000000001 /* TopologyDocumentationView.swift in Sources */,
+				A15300000000000000000001 /* TopologyDocumentationReport.swift in Sources */,
+				A15400000000000000000001 /* TopologyProductShell.swift in Sources */,
+				A15500000000000000000001 /* TopologyProductShellView.swift in Sources */,
+				A11500000000000000000001 /* TopologyEditorState.swift in Sources */,
+				A14800000000000000000001 /* TopologyVirtualFileSystem.swift in Sources */,
+                A14200000000000000000001 /* TopologyNetworkRuntimeEngine.swift in Sources */,
+                A14400000000000000000001 /* TopologyJavaRouteTable.swift in Sources */,
+                A14900000000000000000001 /* TopologyRuntimeSimpleClientEcho.swift in Sources */,
+                A15800000000000000000001 /* TopologyProtocolApplication.swift in Sources */,
+                A16000000000000000000001 /* TopologyEmail.swift in Sources */,
+                A16200000000000000000001 /* TopologyGnutella.swift in Sources */,
+                A16300000000000000000001 /* TopologyRuntimeGnutella.swift in Sources */,
+				A11800000000000000000001 /* TopologyEditorReducer.swift in Sources */,
+				A11900000000000000000001 /* TopologyValidationError.swift in Sources */,
+				A12100000000000000000001 /* TopologyEditorView.swift in Sources */,
+				A16600000000000000000001 /* TopologyEditorUndoCoordinator.swift in Sources */,
+				A12200000000000000000001 /* TopologyCanvasView.swift in Sources */,
+				A12300000000000000000001 /* TopologyPaletteView.swift in Sources */,
+				A16500000000000000000001 /* TopologyParityAssetLoader.swift in Sources */,
+				A15900000000000000000001 /* TopologyProtocolApplicationBuilderView.swift in Sources */,
+				A16100000000000000000001 /* TopologyEmailAppViews.swift in Sources */,
+				A16400000000000000000001 /* TopologyGnutellaAppView.swift in Sources */,
+				A12400000000000000000001 /* ViewportTransform.swift in Sources */,
+				A12600000000000000000001 /* TopologyDebugOverlayView.swift in Sources */,
+				A12900000000000000000001 /* TopologyRuntimeDeviceSheet.swift in Sources */,
+                A14500000000000000000001 /* TopologyJavaRouteTableView.swift in Sources */,
+				A13100000000000000000001 /* TopologyProjectEnvelope.swift in Sources */,
+				A13200000000000000000001 /* TopologyProjectSnapshot.swift in Sources */,
+				A13300000000000000000001 /* TopologyProjectStore.swift in Sources */,
+				A14700000000000000000001 /* TopologyFLSArchive.swift in Sources */,
+				E39E5903BA3452C9B963CA78 /* TopologyFLSOpaqueXML.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A41400000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A11600000000000000000001 /* TopologyEditorReducerTests.swift in Sources */,
+				A12000000000000000000001 /* TopologyEditorDiagnosticsTests.swift in Sources */,
+				A12500000000000000000001 /* ViewportTransformTests.swift in Sources */,
+				A13400000000000000000001 /* TopologyProjectPersistenceTests.swift in Sources */,
+				C0F100000000000000000003 /* FiliusProjectDocumentTypeTests.swift in Sources */,
+                A14300000000000000000001 /* TopologyNetworkRuntimeEngineTests.swift in Sources */,
+                A14600000000000000000001 /* TopologyJavaRouteTableTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A41700000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A11700000000000000000001 /* FiliusPadUITests.swift in Sources */,
+				C01300000000000000000001 /* TopologyVisualRegressionUITests.swift in Sources */,
+				A12700000000000000000001 /* TopologyEditorTouchFlowUITests.swift in Sources */,
+				A12800000000000000000001 /* TopologySimulationRuntimeUITests.swift in Sources */,
+				A13000000000000000000001 /* TopologyRuntimePingWorkflowUITests.swift in Sources */,
+				A13500000000000000000001 /* TopologyProjectPersistenceWorkflowUITests.swift in Sources */,
+				A13600000000000000000001 /* TopologyIntegratedAcceptanceUITests.swift in Sources */,
+				A13800000000000000000001 /* TopologyRuntimeAppLaunchParityUITests.swift in Sources */,
+				A13900000000000000000001 /* TopologyRuntimeServiceAppParityUITests.swift in Sources */,
+                A14000000000000000000001 /* TopologyRuntimeDesktopSuiteParityUITests.swift in Sources */,
+                A14100000000000000000001 /* TopologyInfrastructureParityUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A72100000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A51100000000000000000001 /* FiliusPad */;
+			targetProxy = A71100000000000000000001 /* PBXContainerItemProxy */;
+		};
+		A72200000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A51100000000000000000001 /* FiliusPad */;
+			targetProxy = A71200000000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A62100000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		A62200000000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
+		A62300000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FiliusPad/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.filius.pad;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		A62400000000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FiliusPad/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.filius.pad;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
+		A62500000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.filius.pad.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FiliusPad.app/FiliusPad";
+			};
+			name = Debug;
+		};
+		A62600000000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.filius.pad.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FiliusPad.app/FiliusPad";
+			};
+			name = Release;
+		};
+		A62700000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.filius.pad.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_TARGET_NAME = FiliusPad;
+			};
+			name = Debug;
+		};
+		A62800000000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.filius.pad.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_TARGET_NAME = FiliusPad;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A61100000000000000000001 /* Build configuration list for PBXProject "FiliusPad" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A62100000000000000000001 /* Debug */,
+				A62200000000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A61200000000000000000001 /* Build configuration list for PBXNativeTarget "FiliusPad" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A62300000000000000000001 /* Debug */,
+				A62400000000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A61300000000000000000001 /* Build configuration list for PBXNativeTarget "FiliusPadTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A62500000000000000000001 /* Debug */,
+				A62600000000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A61400000000000000000001 /* Build configuration list for PBXNativeTarget "FiliusPadUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A62700000000000000000001 /* Debug */,
+				A62800000000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A81100000000000000000001 /* Project object */;
+}

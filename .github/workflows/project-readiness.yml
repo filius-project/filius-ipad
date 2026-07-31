@@ -1,0 +1,65 @@
+name: Project Readiness Contracts
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: project-readiness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Fast repository, localization, and CI contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Reject whitespace errors in the pushed range
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before || '' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" && -n "$BASE_SHA" ]]; then
+            base="$BASE_SHA"
+          elif [[ -n "$BEFORE_SHA" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
+            base="$BEFORE_SHA"
+          else
+            base="${GITHUB_SHA}^"
+          fi
+          git diff --check "$base" "$GITHUB_SHA"
+
+      - name: Compile Python validators
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q scripts/project scripts/ci
+
+      - name: Run repository and CI helper tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/project -p "test_*.py" -v
+          python3 -m unittest discover -s scripts/ci -p "test_*.py" -v
+
+      - name: Validate repository readiness contracts
+        run: |
+          set -euo pipefail
+          python3 scripts/project/validate_project_readiness.py
+
+      - name: Validate localization catalogs and source keys
+        run: |
+          set -euo pipefail
+          python3 scripts/project/verify_localization.py --root .

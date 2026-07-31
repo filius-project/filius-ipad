@@ -1,0 +1,170 @@
+name: Build Unsigned IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-unsigned-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Manual Release build and unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Prepare evidence directories
+        run: |
+          set -euo pipefail
+          mkdir -p ios/build/ci/logs ios/build/ci/reports ios/build/ipa
+
+      - name: Validate packaging prerequisites
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          python3 scripts/project/validate_project_readiness.py 2>&1 \
+            | tee ios/build/ci/logs/project-readiness.log
+          python3 -m unittest discover -s scripts/project -p "test_*.py" -v 2>&1 \
+            | tee ios/build/ci/logs/project-readiness-tests.log
+          python3 scripts/project/verify_localization.py --root . 2>&1 \
+            | tee ios/build/ci/logs/localization.log
+
+      - name: Record Apple build environment
+        run: |
+          set -euo pipefail
+          {
+            sw_vers
+            echo
+            xcodebuild -version
+            echo
+            xcrun --sdk iphoneos --show-sdk-version
+            echo
+            xcode-select -p
+          } 2>&1 | tee ios/build/ci/logs/apple-build-environment.log
+
+      - name: Build Release app and package unsigned IPA
+        id: package
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          FILIUSPAD_UNSIGNED=1 \
+          FILIUSPAD_PACKAGE_DRY_RUN=0 \
+          FILIUSPAD_CONFIGURATION=Release \
+          FILIUSPAD_IPA_OUTPUT_PATH="$PWD/ios/build/ipa/FiliusPad.ipa" \
+          bash ios/scripts/package-ipa.sh 2>&1 \
+            | tee ios/build/ci/logs/package-ipa.log
+
+      - name: Verify IPA integrity, document contract, and hash
+        id: verify
+        run: |
+          set -euo pipefail
+          ipa="$PWD/ios/build/ipa/FiliusPad.ipa"
+          if [[ ! -s "$ipa" ]]; then
+            echo "::error::Packaged IPA is missing or empty: $ipa" >&2
+            exit 1
+          fi
+
+          unzip -t "$ipa" 2>&1 | tee ios/build/ci/logs/ipa-integrity.log
+          if ! unzip -Z1 "$ipa" | grep -q '^Payload/FiliusPad.app/'; then
+            echo "::error::Packaged IPA does not contain Payload/FiliusPad.app/" >&2
+            exit 1
+          fi
+
+          extracted_ipa="$RUNNER_TEMP/filiuspad-unsigned-ipa"
+          mkdir -p "$extracted_ipa"
+          unzip -q "$ipa" 'Payload/FiliusPad.app/*' -d "$extracted_ipa"
+          python3 scripts/project/verify_release_package.py \
+            --app "$extracted_ipa/Payload/FiliusPad.app" \
+            --metadata release/app-store/app-metadata.json \
+            --report ios/build/ci/reports/release-package.json
+
+          packaged_plist="$PWD/ios/build/ci/reports/packaged-FiliusPad-Info.plist"
+          unzip -p "$ipa" "Payload/FiliusPad.app/Info.plist" > "$packaged_plist"
+          test -s "$packaged_plist"
+
+          python3 ios/scripts/verify-project-document-contract.py \
+            --packaged-plist "$packaged_plist" \
+            --report ios/build/ci/reports/project-document-contract.json 2>&1 \
+            | tee ios/build/ci/logs/project-document-contract.log
+
+          ipa_size="$(stat -f '%z' "$ipa")"
+          ipa_sha256="$(shasum -a 256 "$ipa" | awk '{print $1}')"
+          echo "ipa_size_bytes=$ipa_size" >> "$GITHUB_OUTPUT"
+          echo "ipa_sha256=$ipa_sha256" >> "$GITHUB_OUTPUT"
+
+          python3 - "$ipa_size" "$ipa_sha256" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          size, sha256 = sys.argv[1:]
+          report = {
+              "workflow": os.environ["GITHUB_WORKFLOW"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "sha": os.environ["GITHUB_SHA"],
+              "ref": os.environ["GITHUB_REF"],
+              "ipa": "ios/build/ipa/FiliusPad.ipa",
+              "ipa_size_bytes": int(size),
+              "ipa_sha256": sha256,
+              "hosted_runtime_validation": {
+                  "workflow": "Apple Simulator Tests",
+                  "included_in_this_job": False,
+                  "required_before_release": True,
+              },
+          }
+          Path("ios/build/ci/reports/ipa-metadata.json").write_text(
+              json.dumps(report, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          cat ios/build/ci/reports/ipa-metadata.json
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: FiliusPad-unsigned-ipa-${{ github.run_id }}
+          path: ios/build/ipa/FiliusPad.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload packaging evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: FiliusPad-ci-evidence-${{ github.run_id }}
+          path: |
+            ios/build/ci/logs
+            ios/build/ci/reports
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Write job summary
+        if: always()
+        env:
+          PACKAGE_OUTCOME: ${{ steps.package.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          IPA_SIZE_BYTES: ${{ steps.verify.outputs.ipa_size_bytes }}
+          IPA_SHA256: ${{ steps.verify.outputs.ipa_sha256 }}
+        run: |
+          {
+            echo "## Manual unsigned IPA package"
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Release build/package: \`${PACKAGE_OUTCOME:-skipped}\`"
+            echo "- Integrity and document contract: \`${VERIFY_OUTCOME:-skipped}\`"
+            echo "- IPA size: \`${IPA_SIZE_BYTES:-unavailable}\` bytes"
+            echo "- IPA SHA-256: \`${IPA_SHA256:-unavailable}\`"
+            echo "- IPA artifact: \`FiliusPad-unsigned-ipa-${GITHUB_RUN_ID}\`"
+            echo "- Evidence artifact: \`FiliusPad-ci-evidence-${GITHUB_RUN_ID}\`"
+            echo
+            echo "Unit/UI simulator validation is intentionally handled by the separate manual Apple Simulator Tests workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

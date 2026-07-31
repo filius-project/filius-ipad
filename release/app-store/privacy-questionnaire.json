@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "releaseBinaryReviewed": false,
+  "dataCollectionDecision": "NO_DATA_TRANSMITTED_OFF_DEVICE_IN_SOURCE_REVIEW",
+  "trackingDecision": "NO_TRACKING_IN_SOURCE_REVIEW",
+  "privacyPolicyApproved": false,
+  "privacyManifestStatus": "PRESENT_USERDEFAULTS_CA92.1_PENDING_ARCHIVE_REVIEW",
+  "requiredReasonAPIReview": "USERDEFAULTS_ONLY_CA92.1_PENDING_ARCHIVE_REVIEW",
+  "thirdPartySDKInventory": "NO_THIRD_PARTY_SDK_DEPENDENCIES_IN_XCODE_PROJECT; VERIFY_RELEASE_ARCHIVE",
+  "dataCategories": [],
+  "retentionAndDeletionOwner": "Sören Schröder",
+  "approval": {
+    "owner": "Sören Schröder",
+    "date": "TODO_YYYY_MM_DD",
+    "evidence": "TODO_LINK_PRIVATE_APPROVAL_RECORD"
+  }
+}

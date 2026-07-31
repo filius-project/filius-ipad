@@ -1,0 +1,96 @@
+name: Real-iPad validation failure
+description: File one independently fixable failure from the physical-device protocol.
+title: "[IPAD-XX] "
+labels:
+  - "bug"
+  - "parity-fidelity"
+  - "needs-device-validation"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Follow the real-iPad validation protocol. Never attach signing assets, provisioning profiles, App Store Connect credentials, account screenshots, UDIDs, or unredacted device logs.
+  - type: input
+    id: case
+    attributes:
+      label: Protocol case and step
+      placeholder: "IPAD-08, step 3"
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Commit, version, and build
+      placeholder: "full commit SHA; 1.0 (1)"
+    validations:
+      required: true
+  - type: input
+    id: toolchain
+    attributes:
+      label: Xcode and iOS SDK
+      placeholder: "Xcode 26.x; iOS SDK 26.x"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: iPad model and iPadOS
+      description: Do not include the device UDID or account identity.
+    validations:
+      required: true
+  - type: dropdown
+    id: install_state
+    attributes:
+      label: Install state
+      options:
+        - Clean install
+        - Upgrade/recovery scenario
+        - Existing installation (explain below)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Exact reproduction steps
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected observation
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed result
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence and fixture hashes
+      description: Include timestamps and SHA-256 hashes. State how authorized maintainers can retrieve restricted originals.
+    validations:
+      required: true
+  - type: dropdown
+    id: reproducibility
+    attributes:
+      label: Reproducibility
+      options:
+        - Always
+        - Intermittent
+        - Once
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: Evidence is sanitized and the issue does not ask anyone to execute pasted text or attachments.
+          required: true
