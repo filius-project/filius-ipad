@@ -58,7 +58,7 @@ Export-compliance answers remain unresolved pending review of the final linked b
 - Excluded `javaversion/`, `ios/parity/`, `.gsd`, `.env`, generated build output, RTK wrappers, and internal project-planning documents.
 - Reduced the working tree from roughly 177 MB to roughly 9 MB before Git metadata.
 - Migrated the localization validator and its reviewed allowlists into `scripts/project/`.
-- Updated workflows, badges, and private-security-report links to `Borega/filius-on-ipad`.
+- Updated workflows, badges, and private-security-report links to `filius-project/filius-ipad`.
 - Added a privacy manifest to the application target.
 - Added `CODEOWNERS`, Dependabot configuration for GitHub Actions, `SECURITY.md`, and an explicit license-status gate.
 - Retained only production packaging, document-contract, simulator-selection, repository-readiness, and local test tooling.

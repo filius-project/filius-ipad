@@ -1,7 +1,7 @@
 # Filius on iPad
 
-[![Project Readiness](https://github.com/Borega/filius-on-ipad/actions/workflows/project-readiness.yml/badge.svg)](https://github.com/Borega/filius-on-ipad/actions/workflows/project-readiness.yml)
-[![Apple Release Readiness](https://github.com/Borega/filius-on-ipad/actions/workflows/apple-release-readiness.yml/badge.svg)](https://github.com/Borega/filius-on-ipad/actions/workflows/apple-release-readiness.yml)
+[![Project Readiness](https://github.com/filius-project/filius-ipad/actions/workflows/project-readiness.yml/badge.svg)](https://github.com/filius-project/filius-ipad/actions/workflows/project-readiness.yml)
+[![Apple Release Readiness](https://github.com/filius-project/filius-ipad/actions/workflows/apple-release-readiness.yml/badge.svg)](https://github.com/filius-project/filius-ipad/actions/workflows/apple-release-readiness.yml)
 
 Filius on iPad is a native SwiftUI network-topology editor and simulator for iPadOS. It provides touch-oriented design, configuration, simulation, documentation, and `.fls` project workflows compatible with desktop FILIUS.
 
