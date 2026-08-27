@@ -41,6 +41,10 @@ jobs:
           else
             base="${GITHUB_SHA}^"
           fi
+          if ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "::warning::Push base $base is not available locally (likely a force-push); checking the new commit against its parent instead."
+            base="${GITHUB_SHA}^"
+          fi
           git diff --check "$base" "$GITHUB_SHA"
 
       - name: Compile Python validators
