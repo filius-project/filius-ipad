@@ -140,7 +140,7 @@ struct TopologyProductInformationSheet: View {
 enum TopologyLegalDocument: String, CaseIterable, Identifiable {
     case gplV2
     case gplV3
-    case applePlatformPermission
+    case applePlatformPermissionHash
 
     var id: String { rawValue }
 
@@ -150,8 +150,8 @@ enum TopologyLegalDocument: String, CaseIterable, Identifiable {
             return "GPLv2.txt"
         case .gplV3:
             return "GPLv3.txt"
-        case .applePlatformPermission:
-            return "Apple-Platform-Additional-Permission.md"
+        case .applePlatformPermissionHash:
+            return "Apple-Platform-Additional-Permission.sha256"
         }
     }
 
@@ -161,8 +161,8 @@ enum TopologyLegalDocument: String, CaseIterable, Identifiable {
             return FiliusLocalization.t("product.legal.gplV2")
         case .gplV3:
             return FiliusLocalization.t("product.legal.gplV3")
-        case .applePlatformPermission:
-            return FiliusLocalization.t("product.legal.applePermission")
+        case .applePlatformPermissionHash:
+            return FiliusLocalization.t("product.legal.applePermissionHash")
         }
     }
 

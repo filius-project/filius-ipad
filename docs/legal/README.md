@@ -1,8 +1,7 @@
 # Legal publication boundary
 
-The public repository contains only the clean, signature-free copies of the executed Apple-platform additional permission:
+The executed Apple-platform permission is **not published** in this repository. The signed scan, paper original, signatures, postal addresses, and full agreement text remain private evidence.
 
-- [German controlling-language copy](public/filius-app-store-additional-permission.de.md)
-- [English translation](public/filius-app-store-additional-permission.en.md)
+The only public record is the SHA-256 fingerprint in [`Filius-Apple-Permission.sha256`](Filius-Apple-Permission.sha256). The same hash-only record is bundled in the app as `Apple-Platform-Additional-Permission.sha256`; it contains no contract text or personal details.
 
-The signed PDF scan, paper original, signatures, postal addresses, and any signing-generation material are private evidence. They must remain outside Git and are ignored by the repository rule for `docs/legal/*.pdf`. The clean public copies do not replace the retained signed originals.
+To compare a privately retained scan, calculate SHA-256 over the exact PDF bytes and compare it with the published value. A matching hash establishes byte-level identity with the privately retained scan; it does not disclose the agreement.

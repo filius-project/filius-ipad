@@ -33,8 +33,7 @@ This directory is the durable entry point for project status, validation, operat
 ## Legal notices
 
 - [Legal publication boundary](legal/README.md)
-- [German public permission copy](legal/public/filius-app-store-additional-permission.de.md)
-- [English public permission copy](legal/public/filius-app-store-additional-permission.en.md)
+- [Permission SHA-256 attestation](legal/Filius-Apple-Permission.sha256)
 - [License status](../LICENSE-STATUS.md): effective date, attribution, and continuing obligations.
 
-The executed permission became effective on **August 23, 2026**, the latest signing date recorded on the returned fully signed copy. The signed PDF, paper original, signatures, and private archive remain outside Git; only the clean public copy is published.
+The executed permission is retained privately. The signed PDF, paper original, signatures, addresses, and agreement text remain outside Git; only the SHA-256 integrity attestation is published.

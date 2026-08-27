@@ -51,7 +51,7 @@ The release-mode command is expected to fail until accountable owners replace ev
 
 ## Legal status
 
-The Apple-platform additional permission is executed and effective August 23, 2026. The public clean copy is included in the repository and the app’s legal resources. The signed scan and paper original remain private. This resolves the former legal-permission blocker but does not establish Apple account access, signing, App Store Connect metadata approval, privacy/export approval, physical-device acceptance, or App Review approval.
+The Apple-platform additional permission is executed and retained privately. The repository and app publish only a SHA-256 integrity attestation; the agreement text, scan, signatures, and addresses remain private. This resolves the former legal-permission blocker but does not establish Apple account access, signing, App Store Connect metadata approval, privacy/export approval, physical-device acceptance, or App Review approval.
 
 ## What remains intentionally impossible
 

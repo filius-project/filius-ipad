@@ -331,7 +331,7 @@ struct TopologyProductMetadata: Equatable {
     static let repositoryLicenseEvidenceFiles = [
         "GPLv2.txt",
         "GPLv3.txt",
-        "Apple-Platform-Additional-Permission.md",
+        "Apple-Platform-Additional-Permission.sha256",
     ]
     static let educationalPurpose = "Netzwerksimulation für Bildungszwecke"
 

@@ -33,6 +33,6 @@ Merges and releases are performed only by a maintainer or an explicitly authoriz
 
 ## Contribution license
 
-By submitting a contribution to this repository, you agree to make that contribution available, at each recipient's choice, under GNU GPL version 2 or GNU GPL version 3 together with the Apple-platform additional permission published by this project. This includes permission for the contribution to be developed, signed, notarized, tested, and distributed through Apple platforms, stores, and services under the conditions of that additional permission.
+By submitting a contribution to this repository, you agree to make that contribution available, at each recipient's choice, under GNU GPL version 2 or GNU GPL version 3 together with the privately retained Apple-platform additional permission represented by this project’s public SHA-256 attestation. This includes permission for the contribution to be developed, signed, notarized, tested, and distributed through Apple platforms, stores, and services under the conditions of that additional permission.
 
 You retain ownership of your original contribution. You represent that you have the right to submit it under these terms. Do not submit third-party code, text, graphics, examples, or other protected material unless its license permits these terms and you include all required notices.

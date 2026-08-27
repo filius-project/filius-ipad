@@ -44,7 +44,7 @@ The current project has code signing disabled and has no configured development 
 
 ### Resolved legal input
 
-The returned scan of the executed agreement shows both parties’ handwritten signatures. Sören Schröder signed in Hamburg on August 19, 2026; Dr. Stefan Freischlad signed in Haiger on August 23, 2026. Under the agreement, the latest signing date controls, so the additional permission is effective **August 23, 2026**. The scan is retained in the private production tree only; its SHA-256 is `9827ca00c24c861644e10f0b6c39aa5deeb7cf8966f79f69070fcb7868ad9d75`. The public repository must contain only the clean permission copy and the app must expose that copy with the GPL texts.
+The executed agreement is retained privately. Its SHA-256 is `9827ca00c24c861644e10f0b6c39aa5deeb7cf8966f79f69070fcb7868ad9d75`; the repository and app expose only that hash-only integrity attestation alongside the GPL texts. No agreement text, signature data, postal address, or scan is published.
 
 This resolves the previously missing effective Apple-distribution permission. It does not replace the separate source-material inventory, third-party license review, Apple account setup, privacy/export decisions, signing, device, or App Review gates.
 
@@ -194,7 +194,7 @@ The app appears to be an educational network simulator and no custom cryptograph
 - [ ] Confirm imported projects are handled safely and malformed XML/archive content cannot crash the app.
 - [ ] Confirm external document names and content are not inserted into unsafe UI or diagnostic output.
 - [ ] Review third-party notices, licenses, and attribution, including the Java runtime components, using the [upstream material inventory](upstream-material-inventory.md).
-- [x] Archive the Apple-platform additional permission executed in two identical paper originals hand-signed by both parties; retain Sören’s original and a private archival scan. Evidence: `LICENSE-STATUS.md` and the private scan archive.
+- [x] Archive the executed Apple-platform additional permission in the privately retained paper original and scan. Publish only the SHA-256 attestation in `LICENSE-STATUS.md` and `docs/legal/Filius-Apple-Permission.sha256`.
 - [ ] Confirm the release tree against the [upstream material inventory](upstream-material-inventory.md), including the listed stable-version provenance and third-party notices.
 
 ## Phase 4 — Store metadata and review materials

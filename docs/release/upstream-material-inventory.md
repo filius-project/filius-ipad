@@ -7,7 +7,7 @@ This inventory records the upstream material visible in the current Filius on iP
 
 ## Executed permission scope
 
-The executed Apple-platform additional permission is document `FILIUS-APPLE-PERMISSION-1.1`, effective August 23, 2026, the latest signing date shown on the returned fully signed copy. It covers qualifying Filius material already incorporated from the following official upstream releases and qualifying future official stable tagged releases, subject to the agreement’s conditions:
+The executed Apple-platform additional permission is retained privately and represented publicly only by the SHA-256 attestation. It covers qualifying Filius material already incorporated from the following official upstream releases and qualifying future official stable tagged releases, subject to the agreement’s conditions:
 
 | Version | Official tag | Commit |
 |---|---|---|
@@ -30,7 +30,7 @@ The agreement does not automatically cover unreleased development branches or in
 | FILIUS example and compatibility projects | `ios/FiliusPadTests/Fixtures/FLS/` and `javaversion/filius-master/beispiele/` | Present; fixture license/notice review remains open |
 | Apple-specific Swift source, UI, persistence, and runtime behavior | `ios/FiliusPad/` outside `Assets/JavaParity/` | Independently maintained Apple edition code; contributor licensing terms are in `CONTRIBUTING.md` |
 | Bundled Java runtime components | `javaversion/filius-master/java-runtime/` | Retains component-specific notices under `java-runtime/legal/`; third-party review remains open |
-| Public Apple permission copy | `docs/legal/public/` | Clean public copy; no postal addresses or signature images |
+| Apple permission integrity attestation | `docs/legal/Filius-Apple-Permission.sha256` | SHA-256 only; no agreement text, addresses, signatures, or scan |
 | Private executed scan | `/Users/macbookairm2/src/filius-on-ipad-prod/docs/legal/Filius-app-store-exception-signed.pdf` | Private evidence only; never commit or publish |
 
 ## Required follow-up before a public release
@@ -41,4 +41,4 @@ The agreement does not automatically cover unreleased development branches or in
 4. Keep the signed paper original and the private scan/hash archive outside Git.
 5. Re-run the inventory after any upstream update, dependency addition, or asset change.
 
-This document is evidence planning, not legal advice and not a substitute for the executed agreement or its controlling German public copy.
+This document is evidence planning, not legal advice and not a substitute for the privately retained executed agreement.

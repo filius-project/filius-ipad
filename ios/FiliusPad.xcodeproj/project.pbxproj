@@ -8,7 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		B20000000000000000000001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000002 /* PrivacyInfo.xcprivacy */; };
-		B20100000000000000000001 /* Apple-Platform-Additional-Permission.md in Resources */ = {isa = PBXBuildFile; fileRef = B20100000000000000000002 /* Apple-Platform-Additional-Permission.md */; };
+		B20100000000000000000001 /* Apple-Platform-Additional-Permission.sha256 in Resources */ = {isa = PBXBuildFile; fileRef = B20100000000000000000002 /* Apple-Platform-Additional-Permission.sha256 */; };
 		B20200000000000000000001 /* GPLv2.txt in Resources */ = {isa = PBXBuildFile; fileRef = B20200000000000000000002 /* GPLv2.txt */; };
 		B20300000000000000000001 /* GPLv3.txt in Resources */ = {isa = PBXBuildFile; fileRef = B20300000000000000000002 /* GPLv3.txt */; };
 		A11100000000000000000001 /* FiliusPadApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A21200000000000000000001 /* FiliusPadApp.swift */; };
@@ -232,7 +232,7 @@
 				A23000000000000000000001 /* Assets.xcassets */,
 				C0F100000000000000000001 /* Info.plist */,
 				B20000000000000000000002 /* PrivacyInfo.xcprivacy */,
-				B20100000000000000000002 /* Apple-Platform-Additional-Permission.md */,
+				B20100000000000000000002 /* Apple-Platform-Additional-Permission.sha256 */,
 				B20200000000000000000002 /* GPLv2.txt */,
 				B20300000000000000000002 /* GPLv3.txt */,
 				A21200000000000000000001 /* FiliusPadApp.swift */,
@@ -492,7 +492,7 @@
 			files = (
 				A24000000000000000000001 /* Assets.xcassets in Resources */,
 				B20000000000000000000001 /* PrivacyInfo.xcprivacy in Resources */,
-				B20100000000000000000001 /* Apple-Platform-Additional-Permission.md in Resources */,
+				B20100000000000000000001 /* Apple-Platform-Additional-Permission.sha256 in Resources */,
 				B20200000000000000000001 /* GPLv2.txt in Resources */,
 				B20300000000000000000001 /* GPLv3.txt in Resources */,
 				A13700000000000000000001 /* Assets/JavaParity in Resources */,

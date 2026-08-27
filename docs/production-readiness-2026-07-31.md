@@ -4,23 +4,23 @@
 
 This review covers the curated `filius-on-ipad` production repository assembled from development revision `3a65cbe`. It evaluates repository hygiene, licensing, build configuration, privacy, security boundaries, release automation, App Store inventory, and verification coverage.
 
-The production repository is intentionally private. This report is not an App Store approval, legal opinion, signed-archive verification, or TestFlight acceptance record.
+This report is not an App Store approval, legal opinion, signed-archive verification, or TestFlight acceptance record.
 
 ## Executive assessment
 
 The application has a substantial automated test suite, no third-party package dependencies, bounded `.fls` parsing and archive handling, and least-privilege unsigned CI workflows. The curated repository removes approximately 168 MB of development-only Java runtime and historical parity material.
 
-It is suitable as a private production staging repository. It is **not ready for public source publication, TestFlight external distribution, or App Store submission** until the blocking items below are resolved.
+It was previously a private production staging repository. Public source publication is now permitted by the privately retained permission, while TestFlight external distribution and App Store submission remain blocked until the items below are resolved.
 
 ## Release blockers
 
 ### P0 — licensing and project identity
 
-1. **Separate license not executed.** The app contains Filius-derived behavior, fixtures, text, and visual assets. A maintainer’s willingness must be converted into a signed license from parties with documented authority over the covered material.
+1. **Source and distribution permission.** The executed permission is retained privately and represented publicly only by the SHA-256 attestation. The app contains Filius-derived behavior, fixtures, text, and visual assets; exact source-material and third-party review remains required.
 2. **Upstream assets are copied verbatim.** Files under `ios/FiliusPad/TopologyEditor/Assets/JavaParity/` were hash-matched against the upstream Filius resources. The final agreement must cover those assets explicitly.
-3. **The Apple-platform permission is now executed.** The app presents GPLv2/GPLv3 together with the clean public copy of the executed Apple-platform additional permission. The signed scan and paper original remain private evidence; third-party notices and all Apple release gates still require separate review.
+3. **The Apple-platform permission is now executed.** The app presents GPLv2/GPLv3 together with a hash-only attestation for the privately retained executed Apple-platform permission. The signed scan, paper original, addresses, and agreement text remain private; third-party notices and all Apple release gates still require separate review.
 4. **Name and marks require permission.** Permission to use “Filius,” the associated logos, icons, and project identity must be recorded separately or included expressly in the signed agreement.
-5. **Repository must remain private.** `LICENSE-STATUS.md` is the authoritative release gate until a final license and public-distribution policy are added.
+5. **Public evidence boundary.** `LICENSE-STATUS.md` records the public hash-only evidence boundary. The signed agreement and personal details must remain private.
 
 ### P0 — Apple release ownership
 
@@ -111,7 +111,7 @@ The repository-mode checks establish a private production baseline; they do not 
 
 Keep both repositories private while the license is unresolved. The production repository may be made public only after:
 
-1. the executed Apple-platform additional permission is retained and its public clean copy is shipped;
+1. the executed Apple-platform additional permission is retained privately and its public SHA-256 attestation is shipped;
 2. the final repository license and contribution policy are added;
 3. the in-app license text matches the signed agreement;
 4. a secret and history review passes; and
