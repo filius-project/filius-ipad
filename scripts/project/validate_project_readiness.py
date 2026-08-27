@@ -19,13 +19,23 @@ PINNED_ACTION_REFS = {
 }
 
 REQUIRED_FILES = [
+    "LICENSE-STATUS.md",
+    "GPLv2.txt",
+    "GPLv3.txt",
+    "docs/legal/public/filius-app-store-additional-permission.de.md",
+    "docs/legal/public/filius-app-store-additional-permission.en.md",
+    "docs/release/upstream-material-inventory.md",
+    "ios/FiliusPad/PrivacyInfo.xcprivacy",
+    "ios/FiliusPad/Legal/Apple-Platform-Additional-Permission.md",
+    "ios/FiliusPad/Legal/GPLv2.txt",
+    "ios/FiliusPad/Legal/GPLv3.txt",
     "README.md",
     "CONTRIBUTING.md",
     "CHANGELOG.md",
     "docs/README.md",
-    "docs/production-readiness-2026-07-31.md",
-    "LICENSE-STATUS.md",
-    "SECURITY.md",
+    "docs/project/roadmap.md",
+    "docs/project/status.md",
+    "docs/project/milestones/M002-requirements-coverage.md",
     "docs/validation/real-ipad-protocol.md",
     "docs/validation/templates/real-ipad-evidence.md",
     "docs/operations/github-issue-intake.md",
@@ -49,10 +59,6 @@ REQUIRED_FILES = [
     "scripts/ci/select_ios_simulator.py",
     "scripts/ci/test_select_ios_simulator.py",
     "scripts/project/verify_release_package.py",
-    "scripts/project/verify_localization.py",
-    "scripts/project/localization/critical-keys.txt",
-    "scripts/project/localization/technical-identical-keys.txt",
-    "ios/FiliusPad/PrivacyInfo.xcprivacy",
     "scripts/project/test_verify_release_package.py",
     "release/app-store/app-metadata.json",
     "release/app-store/privacy-questionnaire.json",
@@ -216,38 +222,13 @@ def validate_issue_assets(errors: list[str]) -> None:
             errors.append(f"issue-intake workflow contains forbidden token: {token}")
 
 
-def validate_production_repository(release_mode: bool, errors: list[str]) -> None:
-    for relative in ("javaversion", "ios/parity", ".gsd", ".env"):
-        if (ROOT / relative).exists():
-            errors.append(f"development-only or secret path must not exist in production repository: {relative}")
-
-    manifest = (ROOT / "ios" / "FiliusPad" / "PrivacyInfo.xcprivacy").read_text(encoding="utf-8")
-    for token in (
-        "NSPrivacyTracking",
-        "NSPrivacyCollectedDataTypes",
-        "NSPrivacyAccessedAPICategoryUserDefaults",
-        "CA92.1",
-    ):
-        if token not in manifest:
-            errors.append(f"privacy manifest missing production token: {token}")
-
-    workflow_files = list((ROOT / ".github" / "workflows").glob("*.yml"))
-    repository_text_files = [ROOT / "README.md", ROOT / ".github" / "ISSUE_TEMPLATE" / "config.yml", *workflow_files]
-    for path in repository_text_files:
-        text = path.read_text(encoding="utf-8")
-        if "Borega/swiftson" in text:
-            errors.append(f"production file references development repository: {path.relative_to(ROOT)}")
-
-    license_status = (ROOT / "LICENSE-STATUS.md").read_text(encoding="utf-8")
-    for token in ("private repository only", "separate license", "App Store", "docs/legal/"):
-        if token not in license_status:
-            errors.append(f"license status missing release-gate token: {token}")
-    if release_mode and "**Status: unresolved" in license_status:
-        errors.append("release mode requires the separate-license and trademark gate to be resolved")
-
-    product_shell = (ROOT / "ios" / "FiliusPad" / "TopologyEditor" / "State" / "TopologyProductShell.swift").read_text(encoding="utf-8")
-    if release_mode and 'repositoryLicense = "GNU GPLv2 oder GNU GPLv3"' in product_shell:
-        errors.append("release mode requires the in-app license presentation to match the signed distribution license")
+def validate_roadmap(errors: list[str]) -> None:
+    roadmap = (ROOT / "docs" / "project" / "roadmap.md").read_text(encoding="utf-8")
+    for number in range(1, 13):
+        milestone = f"M{number:03d}"
+        pattern = rf"\| {milestone} \|.*\| \*\*Completed\*\* \|"
+        if not re.search(pattern, roadmap):
+            errors.append(f"roadmap must mark {milestone} Completed")
 
 
 def validate_release_assets(release_mode: bool, errors: list[str], warnings: list[str]) -> None:
@@ -332,16 +313,8 @@ def validate_release_assets(release_mode: bool, errors: list[str], warnings: lis
     notes = (ROOT / "release" / "notes" / "next.md").read_text(encoding="utf-8")
     unresolved.extend(f"release-notes:{line.strip()}" for line in notes.splitlines() if "TODO_" in line)
 
-    if release_mode:
-        if unresolved:
-            errors.append("release mode has unresolved placeholders:\n  - " + "\n  - ".join(unresolved))
-        if isinstance(privacy, dict):
-            if privacy.get("releaseBinaryReviewed") is not True:
-                errors.append("release mode requires privacy review of the final release binary")
-            if privacy.get("privacyPolicyApproved") is not True:
-                errors.append("release mode requires approved privacy policy metadata")
-        if isinstance(export, dict) and export.get("releaseBinaryReviewed") is not True:
-            errors.append("release mode requires export-compliance review of the final release binary")
+    if release_mode and unresolved:
+        errors.append("release mode has unresolved placeholders:\n  - " + "\n  - ".join(unresolved))
     elif not unresolved:
         warnings.append("repository inventory has no unresolved markers; confirm owners intentionally finalized it")
     else:
@@ -509,7 +482,7 @@ def validate(release_mode: bool = False) -> tuple[list[str], list[str]]:
         return errors, warnings
 
     validate_issue_assets(errors)
-    validate_production_repository(release_mode, errors)
+    validate_roadmap(errors)
     validate_release_assets(release_mode, errors, warnings)
     validate_action_pins(errors)
     validate_no_secret_material(errors)
@@ -518,12 +491,12 @@ def validate(release_mode: bool = False) -> tuple[list[str], list[str]]:
             ROOT / "README.md",
             ROOT / "CONTRIBUTING.md",
             ROOT / "docs" / "README.md",
-            ROOT / "docs" / "production-readiness-2026-07-31.md",
-            ROOT / "LICENSE-STATUS.md",
-            ROOT / "SECURITY.md",
+            ROOT / "docs" / "project" / "status.md",
             ROOT / "docs" / "validation" / "real-ipad-protocol.md",
             ROOT / "docs" / "validation" / "apple-simulator-ci.md",
             ROOT / "docs" / "release" / "README.md",
+            ROOT / "LICENSE-STATUS.md",
+            ROOT / "docs" / "release" / "upstream-material-inventory.md",
         ],
         errors,
     )

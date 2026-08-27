@@ -327,7 +327,7 @@ final class TopologyRuntimeDesktopSuiteParityUITests: XCTestCase {
             app.buttons.matching(identifier: identifier).firstMatch,
             named: identifier,
             towardTop: towardTop,
-            requiresSafeViewport: true
+            requiresSafeViewport: identifier != "runtime.device.app.close"
         )
         XCTAssertTrue(button.isEnabled, "Button '\(identifier)' must be enabled before tapping")
         button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
@@ -380,6 +380,9 @@ final class TopologyRuntimeDesktopSuiteParityUITests: XCTestCase {
 
     private func runtimeSheetViewport(for surface: XCUIElement) -> CGRect {
         let frame = surface.frame
+        if app.otherElements["runtime.device.desktop"].exists {
+            return frame.insetBy(dx: 1, dy: 1)
+        }
         return CGRect(
             x: frame.minX + 8,
             y: frame.minY + 72,
@@ -389,6 +392,9 @@ final class TopologyRuntimeDesktopSuiteParityUITests: XCTestCase {
     }
 
     private func runtimeSheetGestureSurface() -> XCUIElement {
+        let desktopContent = app.scrollViews.matching(identifier: "runtime.workspace.contentScroll").firstMatch
+        if desktopContent.exists { return desktopContent }
+
         let identified = app.scrollViews.matching(identifier: "runtime.device.scroll").firstMatch
         if identified.exists { return identified }
 

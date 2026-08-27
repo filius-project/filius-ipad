@@ -16,6 +16,10 @@ Answers must describe the exact release binary, bundled SDKs, server behavior, a
 - [ ] Ensure support documentation explains data deletion/export where applicable.
 - [ ] Have the privacy/legal owner approve `release/app-store/privacy-questionnaire.json`.
 
+## Current manifest state
+
+`ios/FiliusPad/PrivacyInfo.xcprivacy` is included in the app target and declares no tracking, no collected data types, and the `UserDefaults` reason `CA92.1`. This is a source/build-input change, not final approval: the signed archive must still be inspected and the App Store Connect privacy answers must be approved by the accountable owner.
+
 ## Required-reason API and manifest evidence
 
 Keep a release evidence table with API category, calling module/SDK, approved reason, manifest location, and verification owner. A source scan is a prompt for review, not a complete declaration; inspect the archived app and dependency privacy manifests.

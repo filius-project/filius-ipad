@@ -23,6 +23,11 @@ enum TopologyEditorReducer {
         case arpDelete(ipAddress: String?)
         case arpSend(senderIPAddress: String, targetIPAddress: String)
         case tcpdump
+        case webAdministrationStatus
+        case webAdministrationSetEnabled(Bool)
+        case webAdministrationClearNetworks
+        case webAdministrationAllow(networkAddress: String, subnetMask: String)
+        case webAdministrationRevoke(networkAddress: String, subnetMask: String)
         case dhcpLease(ipAddress: String, subnetMask: String)
         case dhcpRelease
         case dnsRegister(hostname: String, targetIPAddress: String)
@@ -62,6 +67,32 @@ enum TopologyEditorReducer {
         let faultCode: String
         let message: String
         let detail: String
+    }
+
+    private enum RuntimeWebAdministrationApplicationError: Error, LocalizedError {
+        case unsupportedMutation(String)
+        case entryNotFound(String)
+        case conflictingEntry(String)
+        case runtimeReconfigurationFailed(String)
+
+        var statusCode: Int {
+            switch self {
+            case .entryNotFound:
+                return 404
+            case .unsupportedMutation, .conflictingEntry, .runtimeReconfigurationFailed:
+                return 409
+            }
+        }
+
+        var errorDescription: String? {
+            switch self {
+            case let .unsupportedMutation(detail),
+                 let .entryNotFound(detail),
+                 let .conflictingEntry(detail),
+                 let .runtimeReconfigurationFailed(detail):
+                return detail
+            }
+        }
     }
 
     static func reduce(state: inout TopologyEditorState, action: TopologyEditorAction) {
@@ -405,6 +436,7 @@ enum TopologyEditorReducer {
         case let .saveDesignDeviceConfiguration(
             nodeID,
             displayName,
+            hostLabelPolicy,
             deviceConfiguration,
             interfaceConfigurations,
             switchConfiguration,
@@ -561,14 +593,38 @@ enum TopologyEditorReducer {
                 }
                 let normalizedPairIdentifier = remoteLinkConfiguration.pairIdentifier
                     .trimmingCharacters(in: .whitespacesAndNewlines)
+                let normalizedRemoteHost = remoteLinkConfiguration.lanRemoteHost
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !normalizedPairIdentifier.isEmpty else {
                     state.lastValidationError = .invalidDeviceConfiguration
                     return
                 }
+                if remoteLinkConfiguration.transportMode == .localNetwork {
+                    switch remoteLinkConfiguration.lanRole {
+                    case .host:
+                        guard remoteLinkConfiguration.lanPort > 0 else {
+                            state.lastValidationError = .invalidDeviceConfiguration
+                            return
+                        }
+                    case .join:
+                        guard remoteLinkConfiguration.lanRemotePort > 0,
+                              remoteLinkConfiguration.lanJoinMethod != .manual || !normalizedRemoteHost.isEmpty
+                        else {
+                            state.lastValidationError = .invalidDeviceConfiguration
+                            return
+                        }
+                    }
+                }
                 normalizedRemoteLinkConfiguration = TopologyRemoteLinkConfiguration(
                     pairIdentifier: normalizedPairIdentifier,
                     latencyMilliseconds: remoteLinkConfiguration.latencyMilliseconds,
-                    isEnabled: remoteLinkConfiguration.isEnabled
+                    isEnabled: remoteLinkConfiguration.isEnabled,
+                    transportMode: remoteLinkConfiguration.transportMode,
+                    lanRole: remoteLinkConfiguration.lanRole,
+                    lanPort: remoteLinkConfiguration.lanPort,
+                    lanJoinMethod: remoteLinkConfiguration.lanJoinMethod,
+                    lanRemoteHost: normalizedRemoteHost,
+                    lanRemotePort: remoteLinkConfiguration.lanRemotePort
                 )
 
             case .unsupported:
@@ -577,6 +633,12 @@ enum TopologyEditorReducer {
             }
 
             state.graph.nodes[nodeIndex].displayName = normalizedDisplayName
+            if node.kind.isPCClassEndpoint {
+                state.graph.nodes[nodeIndex].hostLabelPolicy = hostLabelPolicy ?? node.hostLabelPolicy
+            } else if hostLabelPolicy != nil {
+                state.lastValidationError = .unsupportedConfiguration
+                return
+            }
             if let normalizedDeviceConfiguration {
                 state.runtimeDeviceConfigurations[nodeID] = normalizedDeviceConfiguration
             } else if !node.kind.isPCClassEndpoint && node.kind != .gateway {
@@ -717,6 +779,29 @@ enum TopologyEditorReducer {
                 detail: "percent=\(state.networkRuntime.simulationSpeed.percent),linkDelayMilliseconds=\(state.networkRuntime.simulationSpeed.linkTransmissionDelayMilliseconds)"
             )
 
+        case let .setGlobalPacketLoss(enabled):
+            guard let enabled else {
+                setMalformedRuntimePayload(
+                    state: &state,
+                    reason: "setGlobalPacketLoss requires enabled"
+                )
+                return
+            }
+            guard state.simulationPhase == .running else {
+                state.networkRuntime.setGlobalPacketLossEnabled(false)
+                recordRuntimeEvent(
+                    state: &state,
+                    code: .globalPacketLossChangeIgnoredWhileStopped
+                )
+                return
+            }
+            state.networkRuntime.setGlobalPacketLossEnabled(enabled)
+            recordRuntimeEvent(
+                state: &state,
+                code: .globalPacketLossChanged,
+                detail: "enabled=\(enabled)"
+            )
+
         case .startSimulation:
             guard state.simulationPhase != .running else {
                 recordRuntimeEvent(
@@ -729,6 +814,7 @@ enum TopologyEditorReducer {
             state.runtimeDHCPLeaseByNodeID.removeAll()
             state.runtimeDNSServerSocketIDByNodeID.removeAll()
             state.runtimeDNSCacheByNodeID.removeAll()
+            state.runtimeTypedDNSResolverCacheByNodeID.removeAll()
             let runtimeSeed = state.networkRuntime.state.seed
             state.networkRuntime.handle(
                 .start(
@@ -828,6 +914,9 @@ enum TopologyEditorReducer {
             for nodeID in state.runtimeWebServerByNodeID.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
                 _ = state.processWebServerRequests(nodeID: nodeID)
             }
+            for nodeID in state.runtimeWebAdministrationByNodeID.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+                _ = state.processWebAdministrationRequests(nodeID: nodeID)
+            }
             projectDHCPRuntimeState(state: &state)
             if state.openedRuntimeDeviceID == nil {
                 state.lastRuntimeFault = nil
@@ -862,6 +951,31 @@ enum TopologyEditorReducer {
                 code: .simulationFaultReported,
                 detail: normalizedCode
             )
+
+        case let .setLANRemoteLinkConnectionState(nodeID, connectionState):
+            guard let nodeID, let connectionState else {
+                state.lastValidationError = .malformedActionPayload
+                return
+            }
+            state.networkRuntime.setLANRemoteLinkConnectionState(nodeID: nodeID, connectionState: connectionState)
+
+        case let .completeLANRemoteLinkOutboundFrame(nodeID, transmissionID, result):
+            guard let nodeID, let transmissionID, let result else {
+                state.lastValidationError = .malformedActionPayload
+                return
+            }
+            state.networkRuntime.completeLANRemoteLinkOutboundFrame(
+                nodeID: nodeID,
+                transmissionID: transmissionID,
+                result: result
+            )
+
+        case let .receiveLANRemoteLinkFrame(nodeID, frame):
+            guard let nodeID, let frame else {
+                state.lastValidationError = .malformedActionPayload
+                return
+            }
+            state.networkRuntime.receiveLANRemoteLinkFrame(frame, nodeID: nodeID)
 
         case let .openRuntimeDevice(nodeID):
             guard let nodeID else {
@@ -1090,6 +1204,20 @@ enum TopologyEditorReducer {
                 }
             }
 
+            if state.simulationPhase == .running,
+               !state.networkRuntime.replaceManualRoutes(nodeID: nodeID, routes: routes) {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .runtimeFault,
+                    code: "manualRouteRuntimeReconfigurationFailed",
+                    message: "The running routing table could not be updated"
+                )
+                recordRuntimeEvent(
+                    state: &state,
+                    code: .runtimeManualRoutesRejectedInvalidConfiguration,
+                    detail: "manualRouteRuntimeReconfigurationFailed"
+                )
+                return
+            }
             if routes.isEmpty {
                 state.runtimeManualRoutesByNodeID.removeValue(forKey: nodeID)
             } else {
@@ -1213,7 +1341,7 @@ enum TopologyEditorReducer {
                       seenMACAddresses.insert(macAddress.lowercased()).inserted else { return nil }
                 return TopologyDHCPStaticAssignment(id: assignment.id, macAddress: macAddress, ipAddress: ipAddress)
             }
-            state.runtimeDHCPServerConfigurationsByNodeID[nodeID] = TopologyDHCPServerConfiguration(
+            let normalizedConfiguration = TopologyDHCPServerConfiguration(
                 isActive: configuration.isActive,
                 lowerBoundIPAddress: lower,
                 upperBoundIPAddress: upper,
@@ -1222,6 +1350,28 @@ enum TopologyEditorReducer {
                 useOwnSettings: node.kind == .gateway ? false : configuration.useOwnSettings,
                 staticAssignments: staticAssignments
             )
+            if state.simulationPhase == .running {
+                switch state.networkRuntime.reconfigureDHCPServer(
+                    nodeID: nodeID,
+                    configuration: normalizedConfiguration
+                ) {
+                case .success:
+                    break
+                case let .failure(error):
+                    state.lastRuntimeFault = TopologyRuntimeFault(
+                        category: .runtimeFault,
+                        code: "dhcpServerRuntimeReconfigurationFailed",
+                        message: error.localizedDescription
+                    )
+                    recordRuntimeEvent(
+                        state: &state,
+                        code: .runtimeDHCPServerConfigurationRejected,
+                        detail: "dhcpServerRuntimeReconfigurationFailed"
+                    )
+                    return
+                }
+            }
+            state.runtimeDHCPServerConfigurationsByNodeID[nodeID] = normalizedConfiguration
             state.lastRuntimeFault = nil
             advancePersistenceRevision(state: &state)
             recordRuntimeEvent(
@@ -1347,6 +1497,209 @@ enum TopologyEditorReducer {
 
         case let .resetRuntimePacketCapture(nodeID, interfaceID):
             state.networkRuntime.clearPacketCapture(nodeID: nodeID, interfaceID: interfaceID)
+
+        case let .saveRuntimeWebAdministrationConfiguration(nodeID, configuration):
+            guard let nodeID, let configuration else {
+                setMalformedRuntimePayload(
+                    state: &state,
+                    reason: "saveRuntimeWebAdministrationConfiguration requires nodeID and configuration"
+                )
+                return
+            }
+            guard let node = state.graph.node(withID: nodeID), node.kind == .router || node.kind == .gateway else {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .networkConfiguration,
+                    code: "webAdministrationUnsupportedForNodeKind",
+                    message: "Web administration is supported only by Router and Gateway nodes"
+                )
+                recordRuntimeEvent(
+                    state: &state,
+                    code: .runtimeWebAdministrationConfigurationRejected,
+                    detail: "webAdministrationUnsupportedForNodeKind"
+                )
+                return
+            }
+            guard (1...65_535).contains(configuration.port) else {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .commandValidation,
+                    code: "invalidWebAdministrationPort",
+                    message: "Web administration port must be an integer between 1 and 65535"
+                )
+                recordRuntimeEvent(
+                    state: &state,
+                    code: .runtimeWebAdministrationConfigurationRejected,
+                    detail: "invalidPort"
+                )
+                return
+            }
+            let normalizedPolicy = TopologyRuntimeWebAdministrationAccessPolicy(
+                isEnabled: configuration.accessPolicy.isEnabled,
+                allowedSourceNetworks: configuration.accessPolicy.allowedSourceNetworks
+            )
+            guard !normalizedPolicy.isEnabled || !normalizedPolicy.allowedSourceNetworks.isEmpty else {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .commandValidation,
+                    code: "webAdministrationPolicyNotReady",
+                    message: "Enabled web administration requires at least one allowed source network"
+                )
+                recordRuntimeEvent(
+                    state: &state,
+                    code: .runtimeWebAdministrationConfigurationRejected,
+                    detail: "missingAllowedSourceNetwork"
+                )
+                return
+            }
+            if let running = state.runtimeWebAdministrationByNodeID[nodeID],
+               running.port != configuration.port {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .runtimeFault,
+                    code: "webAdministrationRestartRequired",
+                    message: "Stop web administration before changing its port"
+                )
+                recordRuntimeEvent(
+                    state: &state,
+                    code: .runtimeWebAdministrationConfigurationRejected,
+                    detail: "listenerRunningPort=\(running.port),requestedPort=\(configuration.port)"
+                )
+                return
+            }
+            let normalizedConfiguration = TopologyRuntimeWebAdministrationConfiguration(
+                port: configuration.port,
+                accessPolicy: normalizedPolicy
+            )
+            guard state.runtimeWebAdministrationConfigurationsByNodeID[nodeID] != normalizedConfiguration else {
+                state.lastRuntimeFault = nil
+                return
+            }
+            state.runtimeWebAdministrationConfigurationsByNodeID[nodeID] = normalizedConfiguration
+            state.runtimeWebAdministrationResponsesByNodeID.removeValue(forKey: nodeID)
+            state.lastRuntimeFault = nil
+            advancePersistenceRevision(state: &state)
+            recordRuntimeEvent(
+                state: &state,
+                code: .runtimeWebAdministrationConfigurationSaved,
+                detail: "nodeID=\(nodeID.uuidString),port=\(configuration.port),enabled=\(normalizedPolicy.isEnabled),networks=\(normalizedPolicy.allowedSourceNetworks.count)"
+            )
+
+        case let .saveRuntimeWebAdministrationPolicy(nodeID, policy):
+            guard let nodeID, let policy else {
+                setMalformedRuntimePayload(
+                    state: &state,
+                    reason: "saveRuntimeWebAdministrationPolicy requires nodeID and policy"
+                )
+                return
+            }
+            let existingPort = state.runtimeWebAdministrationConfigurationsByNodeID[nodeID]?.port
+                ?? TopologyRuntimeWebAdministrationConfiguration.defaultPort
+            reduce(
+                state: &state,
+                action: .saveRuntimeWebAdministrationConfiguration(
+                    nodeID: nodeID,
+                    configuration: TopologyRuntimeWebAdministrationConfiguration(
+                        port: existingPort,
+                        accessPolicy: policy
+                    )
+                )
+            )
+
+        case let .runtimeWebAdministrationRequest(nodeID, request):
+            guard let nodeID, let request else {
+                setMalformedRuntimePayload(
+                    state: &state,
+                    reason: "runtimeWebAdministrationRequest requires nodeID and request"
+                )
+                return
+            }
+            guard let node = state.graph.node(withID: nodeID), node.kind == .router || node.kind == .gateway else {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .networkConfiguration,
+                    code: "webAdministrationUnsupportedForNodeKind",
+                    message: "Web administration is supported only by Router and Gateway nodes"
+                )
+                recordRuntimeEvent(
+                    state: &state,
+                    code: .runtimeWebAdministrationRequestRejected,
+                    detail: "webAdministrationUnsupportedForNodeKind"
+                )
+                return
+            }
+
+            let configuration = state.runtimeWebAdministrationConfigurationsByNodeID[nodeID]
+                ?? TopologyRuntimeWebAdministrationConfiguration()
+            let response: TopologyRuntimeWebAdministrationResponse
+            if request.method == "POST" {
+                do {
+                    let intent = try TopologyRuntimeWebAdministrationMutationValidator.validate(
+                        request: request,
+                        policy: configuration.accessPolicy
+                    )
+                    let didChangePersistentConfiguration = try applyRuntimeWebAdministrationMutation(
+                        intent,
+                        nodeID: nodeID,
+                        nodeKind: node.kind,
+                        state: &state
+                    )
+                    if didChangePersistentConfiguration {
+                        advancePersistenceRevision(state: &state)
+                    }
+                    response = runtimeWebAdministrationMutationResponse(
+                        statusCode: 200,
+                        title: "Administration mutation applied",
+                        detail: runtimeWebAdministrationMutationDetail(intent)
+                    )
+                } catch let error as TopologyRuntimeWebAdministrationMutationError {
+                    response = runtimeWebAdministrationMutationResponse(
+                        statusCode: runtimeWebAdministrationStatusCode(for: error),
+                        title: "Administration mutation rejected",
+                        detail: error.localizedDescription
+                    )
+                } catch let error as RuntimeWebAdministrationApplicationError {
+                    response = runtimeWebAdministrationMutationResponse(
+                        statusCode: error.statusCode,
+                        title: "Administration mutation rejected",
+                        detail: error.localizedDescription
+                    )
+                } catch {
+                    response = runtimeWebAdministrationMutationResponse(
+                        statusCode: 500,
+                        title: "Administration mutation failed",
+                        detail: "The administration mutation could not be applied."
+                    )
+                }
+            } else if let snapshot = state.runtimeWebAdministrationSnapshot(for: nodeID) {
+                response = TopologyRuntimeWebAdministrationRenderer.render(
+                    request: request,
+                    policy: configuration.accessPolicy,
+                    snapshot: snapshot
+                )
+            } else {
+                response = runtimeWebAdministrationMutationResponse(
+                    statusCode: 404,
+                    title: "Administration state unavailable",
+                    detail: "Router or Gateway administration state is unavailable."
+                )
+            }
+
+            state.runtimeWebAdministrationResponsesByNodeID[nodeID] = response
+            if (200...299).contains(response.statusCode) {
+                state.lastRuntimeFault = nil
+                recordRuntimeEvent(
+                    state: &state,
+                    code: .runtimeWebAdministrationRequestServed,
+                    detail: "nodeID=\(nodeID.uuidString),status=\(response.statusCode)"
+                )
+            } else {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .networkConfiguration,
+                    code: "webAdministrationHTTP\(response.statusCode)",
+                    message: response.detail
+                )
+                recordRuntimeEvent(
+                    state: &state,
+                    code: .runtimeWebAdministrationRequestRejected,
+                    detail: "nodeID=\(nodeID.uuidString),status=\(response.statusCode)"
+                )
+            }
 
         case let .saveRuntimePortForwardingRows(nodeID, rows):
             guard let nodeID, let rows else {
@@ -2333,6 +2686,7 @@ enum TopologyEditorReducer {
                 return
             }
             state.networkRuntime.stopDNSServer(nodeID: sourceNodeID)
+            state.invalidateRuntimeDNSCache()
             state.lastRuntimeFault = nil
             recordRuntimeEvent(state: &state, code: .dnsServerStopped, detail: "node=\(sourceNodeID.uuidString)")
             appendConsoleLine(state: &state, nodeID: sourceNodeID, line: "DNS Server stopped")
@@ -2393,6 +2747,47 @@ enum TopologyEditorReducer {
                 targetIPAddress: normalizedAddress
             )
 
+        case let .runtimeDNSAddTypedRecord(nodeID, hostname, recordType, target, ttlSeconds):
+            guard let sourceNodeID = validateServiceAppContext(
+                state: &state,
+                nodeID: nodeID,
+                expectedProgram: .dnsServer,
+                actionName: "runtimeDNSAddTypedRecord"
+            ) else { return }
+            guard state.simulationPhase == .running else {
+                setDNSFailure(
+                    state: &state,
+                    sourceNodeID: sourceNodeID,
+                    eventCode: .dnsRecordRejectedSimulationStopped,
+                    faultCategory: .runtimeFault,
+                    faultCode: "dnsWhileSimulationStopped",
+                    message: "DNS actions require a running simulation",
+                    detail: "phase=\(state.simulationPhase.rawValue),source=serviceApp"
+                )
+                return
+            }
+            guard let recordType, let target, let ttlSeconds,
+                  let normalizedHost = normalizedHostname(hostname),
+                  let record = TopologyDNSResourceRecord(
+                    name: normalizedHost,
+                    type: recordType,
+                    ttlSeconds: ttlSeconds,
+                    target: target
+                  )
+            else {
+                setDNSFailure(
+                    state: &state,
+                    sourceNodeID: sourceNodeID,
+                    eventCode: .dnsRecordRejectedMalformedCommand,
+                    faultCategory: .commandValidation,
+                    faultCode: "malformedDNSCommand",
+                    message: "DNS record name, type, target, and TTL are invalid",
+                    detail: "malformedDNSCommand"
+                )
+                return
+            }
+            executeDNSRegisterTypedCommand(state: &state, sourceNodeID: sourceNodeID, record: record)
+
         case let .runtimeDNSRemoveRecord(nodeID, hostname):
             guard let sourceNodeID = validateServiceAppContext(
                 state: &state,
@@ -2435,6 +2830,113 @@ enum TopologyEditorReducer {
                 hostname: normalizedHost
             )
 
+        case let .runtimeDNSRemoveTypedRecord(nodeID, hostname, recordType, target):
+            guard let sourceNodeID = validateServiceAppContext(
+                state: &state,
+                nodeID: nodeID,
+                expectedProgram: .dnsServer,
+                actionName: "runtimeDNSRemoveTypedRecord"
+            ) else { return }
+            guard state.simulationPhase == .running else {
+                setDNSFailure(
+                    state: &state,
+                    sourceNodeID: sourceNodeID,
+                    eventCode: .dnsRecordRejectedSimulationStopped,
+                    faultCategory: .runtimeFault,
+                    faultCode: "dnsWhileSimulationStopped",
+                    message: "DNS actions require a running simulation",
+                    detail: "phase=\(state.simulationPhase.rawValue),source=serviceApp"
+                )
+                return
+            }
+            guard let recordType, let target, let normalizedHost = normalizedHostname(hostname) else {
+                setDNSFailure(
+                    state: &state,
+                    sourceNodeID: sourceNodeID,
+                    eventCode: .dnsRecordRejectedMalformedCommand,
+                    faultCategory: .commandValidation,
+                    faultCode: "malformedDNSCommand",
+                    message: "DNS record name, type, and target are required",
+                    detail: "malformedDNSCommand"
+                )
+                return
+            }
+            executeDNSRemoveTypedCommand(
+                state: &state,
+                sourceNodeID: sourceNodeID,
+                hostname: normalizedHost,
+                recordType: recordType,
+                target: target
+            )
+
+        case let .runtimeDNSSetRecursion(nodeID, enabled, forwardingServerIPAddress):
+            guard let sourceNodeID = validateServiceAppContext(
+                state: &state,
+                nodeID: nodeID,
+                expectedProgram: .dnsServer,
+                actionName: "runtimeDNSSetRecursion"
+            ) else { return }
+            guard let enabled else {
+                setMalformedRuntimePayload(state: &state, reason: "runtimeDNSSetRecursion requires enabled")
+                return
+            }
+            let forwarder = forwardingServerIPAddress?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard forwarder.isEmpty || normalizedIPv4Address(forwarder) != nil else {
+                setDNSFailure(
+                    state: &state,
+                    sourceNodeID: sourceNodeID,
+                    eventCode: .dnsRecordRejectedMalformedCommand,
+                    faultCategory: .commandValidation,
+                    faultCode: "malformedDNSForwarder",
+                    message: "DNS recursive forwarder must be a valid IPv4 address",
+                    detail: "malformedDNSForwarder"
+                )
+                return
+            }
+            var configuration = state.runtimeDNSServerConfigurationsByNodeID[sourceNodeID] ?? TopologyRuntimeDNSServerConfiguration()
+            configuration.recursiveResolutionEnabled = enabled
+            configuration.forwardingServerIPAddress = enabled && !forwarder.isEmpty ? normalizedIPv4Address(forwarder) : nil
+            state.runtimeDNSServerConfigurationsByNodeID[sourceNodeID] = configuration
+            state.invalidateRuntimeDNSCache()
+            state.lastRuntimeFault = nil
+            advancePersistenceRevision(state: &state)
+            recordRuntimeEvent(
+                state: &state,
+                code: .dnsRecordRegistered,
+                detail: "serverNode=\(sourceNodeID.uuidString),recursive=\(enabled),forwarder=\(configuration.forwardingServerIPAddress ?? "none")"
+            )
+            appendConsoleLine(
+                state: &state,
+                nodeID: sourceNodeID,
+                line: "DNS recursive resolution \(enabled ? "enabled" : "disabled")"
+            )
+
+        case let .runtimeDNSResolveTypedRecord(nodeID, hostname, recordType):
+            guard let sourceNodeID = validateServiceAppContext(
+                state: &state,
+                nodeID: nodeID,
+                expectedProgram: .dnsServer,
+                actionName: "runtimeDNSResolveTypedRecord"
+            ) else { return }
+            guard let recordType, let normalizedHost = normalizedHostname(hostname) else {
+                setDNSFailure(
+                    state: &state,
+                    sourceNodeID: sourceNodeID,
+                    eventCode: .dnsRecordRejectedMalformedCommand,
+                    faultCategory: .commandValidation,
+                    faultCode: "malformedDNSCommand",
+                    message: "DNS lookup name and type are required",
+                    detail: "malformedDNSCommand"
+                )
+                return
+            }
+            executeDNSResolveTypedCommand(
+                state: &state,
+                sourceNodeID: sourceNodeID,
+                hostname: normalizedHost,
+                recordType: recordType
+            )
+
         case let .runtimeDNSResolveRecord(nodeID, hostname):
             guard let sourceNodeID = validateServiceAppContext(
                 state: &state,
@@ -2475,6 +2977,60 @@ enum TopologyEditorReducer {
                 state: &state,
                 sourceNodeID: sourceNodeID,
                 hostname: normalizedHost
+            )
+
+        case let .saveRuntimeWebServerConfiguration(nodeID, configuration):
+            guard let nodeID, let configuration else {
+                setMalformedRuntimePayload(
+                    state: &state,
+                    reason: "saveRuntimeWebServerConfiguration requires nodeID and configuration"
+                )
+                return
+            }
+            guard let node = state.graph.node(withID: nodeID), node.kind.isPCClassEndpoint || node.kind == .router || node.kind == .gateway else {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .networkConfiguration,
+                    code: "webServerConfigurationUnsupportedForNodeKind",
+                    message: "Web Server configuration requires a PC, Notebook, Router, or Gateway node"
+                )
+                return
+            }
+            do {
+                try configuration.validate()
+            } catch {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .commandValidation,
+                    code: "invalidWebServerConfiguration",
+                    message: error.localizedDescription
+                )
+                recordRuntimeEvent(
+                    state: &state,
+                    code: .webServerRejectedInvalidConfiguration,
+                    detail: "node=\(nodeID.uuidString),reason=invalidWebServerConfiguration"
+                )
+                return
+            }
+            if let runningState = state.runtimeWebServerByNodeID[nodeID],
+               runningState.port != configuration.port {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .runtimeFault,
+                    code: "webServerPortChangeRequiresStop",
+                    message: "Stop Web Server before changing its listener port"
+                )
+                recordRuntimeEvent(
+                    state: &state,
+                    code: .webServerRejectedInvalidConfiguration,
+                    detail: "node=\(nodeID.uuidString),reason=listenerPortChangeWhileRunning,current=\(runningState.port),requested=\(configuration.port)"
+                )
+                return
+            }
+            state.runtimeWebServerConfigurationsByNodeID[nodeID] = configuration
+            state.lastRuntimeFault = nil
+            advancePersistenceRevision(state: &state)
+            recordRuntimeEvent(
+                state: &state,
+                code: .webServerConfigurationSaved,
+                detail: "node=\(nodeID.uuidString),port=\(configuration.port),virtualHosts=\(configuration.virtualHostConfiguration?.hosts.count ?? 0)"
             )
 
         case let .runtimeWebStart(nodeID, port):
@@ -2528,9 +3084,11 @@ enum TopologyEditorReducer {
                 return
             }
 
+            let existingWebConfiguration = state.runtimeWebServerConfigurationsByNodeID[sourceNodeID]
             state.runtimeWebServerConfigurationsByNodeID[sourceNodeID] = TopologyRuntimeWebServerConfiguration(
                 port: normalizedPort,
-                documentRoot: state.runtimeWebServerConfigurationsByNodeID[sourceNodeID]?.documentRoot ?? TopologyRuntimeWebServerConfiguration.defaultDocumentRoot
+                documentRoot: existingWebConfiguration?.documentRoot ?? TopologyRuntimeWebServerConfiguration.defaultDocumentRoot,
+                virtualHostConfiguration: existingWebConfiguration?.virtualHostConfiguration
             )
             advancePersistenceRevision(state: &state)
 
@@ -2660,6 +3218,106 @@ enum TopologyEditorReducer {
             reduce(state: &state, action: .runtimeWebStart(nodeID: sourceNodeID, port: String(normalizedPort)))
             guard state.runtimeWebServerByNodeID[sourceNodeID]?.port == normalizedPort else { return }
             recordRuntimeEvent(state: &state, code: .webServerRestarted, detail: "node=\(sourceNodeID.uuidString),port=\(normalizedPort)")
+
+        case let .runtimeWebAdministrationStart(nodeID, port):
+            guard let sourceNodeID = nodeID,
+                  let node = state.graph.node(withID: sourceNodeID),
+                  node.kind == .router || node.kind == .gateway
+            else {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .networkConfiguration,
+                    code: "webAdministrationUnsupportedForNodeKind",
+                    message: "Web administration is supported only by Router and Gateway nodes"
+                )
+                recordRuntimeEvent(state: &state, code: .runtimeWebAdministrationConfigurationRejected, detail: "unsupportedNode")
+                return
+            }
+            guard state.simulationPhase == .running else {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .runtimeFault,
+                    code: "webAdministrationWhileSimulationStopped",
+                    message: "Web administration requires a running simulation"
+                )
+                recordRuntimeEvent(state: &state, code: .runtimeWebAdministrationConfigurationRejected, detail: "simulationStopped")
+                return
+            }
+            let existingConfiguration = state.runtimeWebAdministrationConfigurationsByNodeID[sourceNodeID]
+                ?? TopologyRuntimeWebAdministrationConfiguration()
+            guard existingConfiguration.accessPolicy.isEnabled,
+                  !existingConfiguration.accessPolicy.allowedSourceNetworks.isEmpty
+            else {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .commandValidation,
+                    code: "webAdministrationPolicyNotReady",
+                    message: "Enable web administration and add at least one allowed source network before starting it"
+                )
+                recordRuntimeEvent(
+                    state: &state,
+                    code: .runtimeWebAdministrationConfigurationRejected,
+                    detail: "policyNotReady"
+                )
+                return
+            }
+            guard let normalizedPort = normalizedServicePort(
+                port ?? String(existingConfiguration.port)
+            ) else {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .commandValidation,
+                    code: "invalidWebAdministrationPort",
+                    message: "Web administration port must be an integer between 1 and 65535"
+                )
+                recordRuntimeEvent(state: &state, code: .runtimeWebAdministrationConfigurationRejected, detail: "invalidPort")
+                return
+            }
+            if state.runtimeWebAdministrationByNodeID[sourceNodeID] != nil {
+                state.lastRuntimeFault = nil
+                recordRuntimeEvent(state: &state, code: .runtimeWebAdministrationConfigurationSaved, detail: "listenerAlreadyRunning=\(sourceNodeID.uuidString)")
+                return
+            }
+            guard let listenerSocketID = state.networkRuntime.openTCPServerSocket(
+                nodeID: sourceNodeID,
+                localPort: UInt16(normalizedPort)
+            ) else {
+                state.lastRuntimeFault = TopologyRuntimeFault(
+                    category: .runtimeFault,
+                    code: "webAdministrationPortInUse",
+                    message: "Web administration port is already in use"
+                )
+                recordRuntimeEvent(state: &state, code: .runtimeWebAdministrationConfigurationRejected, detail: "portInUse=\(normalizedPort)")
+                return
+            }
+            state.runtimeWebAdministrationConfigurationsByNodeID[sourceNodeID] = TopologyRuntimeWebAdministrationConfiguration(
+                port: normalizedPort,
+                accessPolicy: existingConfiguration.accessPolicy
+            )
+            state.runtimeWebAdministrationSocketIDByNodeID[sourceNodeID] = listenerSocketID
+            state.runtimeWebAdministrationByNodeID[sourceNodeID] = TopologyRuntimeServiceProcessState(port: normalizedPort)
+            state.lastRuntimeFault = nil
+            advancePersistenceRevision(state: &state)
+            recordRuntimeEvent(state: &state, code: .runtimeWebAdministrationConfigurationSaved, detail: "listenerStarted=\(sourceNodeID.uuidString),port=\(normalizedPort)")
+
+        case let .runtimeWebAdministrationStop(nodeID):
+            guard let sourceNodeID = nodeID,
+                  let node = state.graph.node(withID: sourceNodeID),
+                  node.kind == .router || node.kind == .gateway
+            else {
+                state.lastRuntimeFault = TopologyRuntimeFault(category: .networkConfiguration, code: "webAdministrationUnsupportedForNodeKind", message: "Web administration is supported only by Router and Gateway nodes")
+                recordRuntimeEvent(state: &state, code: .runtimeWebAdministrationConfigurationRejected, detail: "unsupportedNode")
+                return
+            }
+            guard state.runtimeWebAdministrationByNodeID.removeValue(forKey: sourceNodeID) != nil else {
+                state.runtimeWebAdministrationResponsesByNodeID.removeValue(forKey: sourceNodeID)
+                return
+            }
+            if let listenerSocketID = state.runtimeWebAdministrationSocketIDByNodeID.removeValue(forKey: sourceNodeID) {
+                for acceptedSocketID in state.networkRuntime.acceptedTCPSocketIDs(listenerSocketID: listenerSocketID) {
+                    _ = state.networkRuntime.closeTCPConnectionAndClean(socketID: acceptedSocketID)
+                }
+                state.networkRuntime.closeTCPSocket(socketID: listenerSocketID)
+            }
+            state.runtimeWebAdministrationResponsesByNodeID.removeValue(forKey: sourceNodeID)
+            state.lastRuntimeFault = nil
+            recordRuntimeEvent(state: &state, code: .runtimeWebAdministrationConfigurationSaved, detail: "listenerStopped=\(sourceNodeID.uuidString)")
 
         case let .runtimeWebBrowserNavigate(nodeID, address):
             guard let sourceNodeID = validateServiceAppContext(
@@ -3055,6 +3713,9 @@ enum TopologyEditorReducer {
             for serverNodeID in state.runtimeWebServerByNodeID.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
                 _ = state.processWebServerRequests(nodeID: serverNodeID)
             }
+            for serverNodeID in state.runtimeWebAdministrationByNodeID.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+                _ = state.processWebAdministrationRequests(nodeID: serverNodeID)
+            }
             let response: Data?
             if let immediateResponse = initialResult.response {
                 response = immediateResponse
@@ -3244,6 +3905,71 @@ enum TopologyEditorReducer {
                 recordRuntimeEvent(state: &state, code: .emailClientRetrieveSucceeded, detail: "node=\(sourceNodeID.uuidString),messages=\(messages.count)")
             case let .failure(error):
                 setEmailFailure(state: &state, nodeID: sourceNodeID, eventCode: .emailClientRetrieveRejected, faultCode: "emailClientRetrieveRejected", error: error)
+            }
+
+        case let .runtimeEmailClientDeleteMessages(nodeID, folder, messageIDs):
+            guard let sourceNodeID = validateDesktopSuiteAppContext(
+                state: &state,
+                nodeID: nodeID,
+                expectedProgram: .emailClient,
+                actionName: "runtimeEmailClientDeleteMessages"
+            ), let folder, let messageIDs else {
+                if folder == nil || messageIDs == nil {
+                    setMalformedRuntimePayload(
+                        state: &state,
+                        reason: "runtimeEmailClientDeleteMessages requires folder and messageIDs"
+                    )
+                }
+                return
+            }
+            guard let configuration = state.runtimeEmailClientConfigurationsByNodeID[sourceNodeID] else {
+                setEmailFailure(
+                    state: &state,
+                    nodeID: sourceNodeID,
+                    eventCode: .emailClientDeleteRejected,
+                    faultCode: "emailClientDeleteRejected",
+                    error: .validation("Missing email client configuration.")
+                )
+                return
+            }
+
+            do {
+                let deletion = try TopologyEmailActions.deletingMessages(
+                    withIDs: messageIDs,
+                    from: folder,
+                    configuration: configuration
+                )
+                switch state.saveRuntimeEmailClientConfiguration(
+                    nodeID: sourceNodeID,
+                    configuration: deletion.configuration
+                ) {
+                case .success:
+                    state.lastRuntimeFault = nil
+                    if !deletion.deletedMessages.isEmpty {
+                        advancePersistenceRevision(state: &state)
+                    }
+                    recordRuntimeEvent(
+                        state: &state,
+                        code: .emailClientMessagesDeleted,
+                        detail: "node=\(sourceNodeID.uuidString),folder=\(folder.rawValue),messages=\(deletion.deletedMessages.count)"
+                    )
+                case let .failure(error):
+                    setEmailFailure(
+                        state: &state,
+                        nodeID: sourceNodeID,
+                        eventCode: .emailClientDeleteRejected,
+                        faultCode: "emailClientDeleteRejected",
+                        error: error
+                    )
+                }
+            } catch {
+                setEmailFailure(
+                    state: &state,
+                    nodeID: sourceNodeID,
+                    eventCode: .emailClientDeleteRejected,
+                    faultCode: "emailClientDeleteRejected",
+                    error: .validation(error.localizedDescription)
+                )
             }
 
         case let .saveRuntimeGnutellaConfiguration(nodeID, configuration):
@@ -3495,6 +4221,35 @@ enum TopologyEditorReducer {
 
             case let .success(runtimeCommand):
                 switch runtimeCommand {
+                case .webAdministrationStatus,
+                     .webAdministrationSetEnabled,
+                     .webAdministrationClearNetworks,
+                     .webAdministrationAllow,
+                     .webAdministrationRevoke:
+                    guard let node = state.graph.node(withID: sourceNodeID),
+                          node.kind == .router || node.kind == .gateway else {
+                        state.lastRuntimeFault = TopologyRuntimeFault(
+                            category: .networkConfiguration,
+                            code: "webAdministrationUnsupportedForNodeKind",
+                            message: "Web administration is supported only by Router and Gateway nodes"
+                        )
+                        appendConsoleLine(
+                            state: &state,
+                            nodeID: sourceNodeID,
+                            line: "Web administration is supported only by Router and Gateway nodes"
+                        )
+                        recordRuntimeEvent(
+                            state: &state,
+                            code: .runtimeWebAdministrationRequestRejected,
+                            detail: "webAdministrationUnsupportedForNodeKind"
+                        )
+                        return
+                    }
+                default:
+                    break
+                }
+
+                switch runtimeCommand {
                 case let .ping(target):
                     guard state.simulationPhase == .running else {
                         setPingFailure(
@@ -3581,6 +4336,95 @@ enum TopologyEditorReducer {
                         state: &state,
                         sourceNodeID: sourceNodeID,
                         commandToken: commandToken
+                    )
+
+                case .webAdministrationStatus:
+                    let policy = state.runtimeWebAdministrationConfigurationsByNodeID[sourceNodeID]?.accessPolicy ?? TopologyRuntimeWebAdministrationAccessPolicy()
+                    let networks = policy.allowedSourceNetworks
+                        .map { "\($0.networkAddress)/\($0.subnetMask)" }
+                        .joined(separator: ", ")
+                    appendConsoleLine(
+                        state: &state,
+                        nodeID: sourceNodeID,
+                        line: "Web administration: enabled=\(policy.isEnabled), allowedNetworks=\(networks)"
+                    )
+                case let .webAdministrationSetEnabled(enabled):
+                    let current = state.runtimeWebAdministrationConfigurationsByNodeID[sourceNodeID]?.accessPolicy ?? TopologyRuntimeWebAdministrationAccessPolicy()
+                    reduce(
+                        state: &state,
+                        action: .saveRuntimeWebAdministrationPolicy(
+                            nodeID: sourceNodeID,
+                            policy: TopologyRuntimeWebAdministrationAccessPolicy(
+                                isEnabled: enabled,
+                                allowedSourceNetworks: current.allowedSourceNetworks
+                            )
+                        )
+                    )
+                case .webAdministrationClearNetworks:
+                    reduce(
+                        state: &state,
+                        action: .saveRuntimeWebAdministrationPolicy(
+                            nodeID: sourceNodeID,
+                            policy: TopologyRuntimeWebAdministrationAccessPolicy(
+                                isEnabled: false,
+                                allowedSourceNetworks: []
+                            )
+                        )
+                    )
+                case let .webAdministrationAllow(networkAddress, subnetMask):
+                    let current = state.runtimeWebAdministrationConfigurationsByNodeID[sourceNodeID]?.accessPolicy ?? TopologyRuntimeWebAdministrationAccessPolicy()
+                    guard let network = try? TopologyRuntimeWebAdministrationIPv4Network(
+                        networkAddress: networkAddress, subnetMask: subnetMask
+                    ) else {
+                        state.lastRuntimeFault = TopologyRuntimeFault(
+                            category: .commandValidation,
+                            code: "invalidWebAdministrationNetwork",
+                            message: "Web administration source network is invalid"
+                        )
+                        recordRuntimeEvent(
+                            state: &state,
+                            code: .runtimeWebAdministrationConfigurationRejected,
+                            detail: "invalidWebAdministrationNetwork"
+                        )
+                        return
+                    }
+                    reduce(
+                        state: &state,
+                        action: .saveRuntimeWebAdministrationPolicy(
+                            nodeID: sourceNodeID,
+                            policy: TopologyRuntimeWebAdministrationAccessPolicy(
+                                isEnabled: current.isEnabled,
+                                allowedSourceNetworks: current.allowedSourceNetworks + [network]
+                            )
+                        )
+                    )
+                case let .webAdministrationRevoke(networkAddress, subnetMask):
+                    let current = state.runtimeWebAdministrationConfigurationsByNodeID[sourceNodeID]?.accessPolicy ?? TopologyRuntimeWebAdministrationAccessPolicy()
+                    guard let network = try? TopologyRuntimeWebAdministrationIPv4Network(
+                        networkAddress: networkAddress, subnetMask: subnetMask
+                    ) else {
+                        state.lastRuntimeFault = TopologyRuntimeFault(
+                            category: .commandValidation,
+                            code: "invalidWebAdministrationNetwork",
+                            message: "Web administration source network is invalid"
+                        )
+                        recordRuntimeEvent(
+                            state: &state,
+                            code: .runtimeWebAdministrationConfigurationRejected,
+                            detail: "invalidWebAdministrationNetwork"
+                        )
+                        return
+                    }
+                    let remainingNetworks = current.allowedSourceNetworks.filter { $0 != network }
+                    reduce(
+                        state: &state,
+                        action: .saveRuntimeWebAdministrationPolicy(
+                            nodeID: sourceNodeID,
+                            policy: TopologyRuntimeWebAdministrationAccessPolicy(
+                                isEnabled: current.isEnabled && !remainingNetworks.isEmpty,
+                                allowedSourceNetworks: remainingNetworks
+                            )
+                        )
                     )
 
                 case .ipconfig:
@@ -3767,6 +4611,327 @@ enum TopologyEditorReducer {
     }
 
 
+    /// Applies one validated administration intent as a single reducer transaction.
+    /// Every fallible semantic check is completed before persisted/runtime state is changed.
+    @discardableResult
+    private static func applyRuntimeWebAdministrationMutation(
+        _ intent: TopologyRuntimeWebAdministrationMutationIntent,
+        nodeID: UUID,
+        nodeKind: TopologyNodeKind,
+        state: inout TopologyEditorState
+    ) throws -> Bool {
+        switch intent {
+        case let .addRoute(mutation):
+            guard nodeKind == .router || nodeKind == .gateway else {
+                throw RuntimeWebAdministrationApplicationError.unsupportedMutation(
+                    "Route administration is supported only by Router and Gateway nodes."
+                )
+            }
+            let route = TopologyRuntimeManualRoute(
+                destinationNetwork: mutation.destinationNetwork,
+                subnetMask: mutation.subnetMask,
+                gateway: mutation.gatewayIPAddress,
+                interfaceIPAddress: mutation.interfaceIPAddress
+            )
+            var routes = state.runtimeManualRoutesByNodeID[nodeID] ?? []
+            guard !routes.contains(route) else {
+                throw RuntimeWebAdministrationApplicationError.conflictingEntry(
+                    "An identical manual route already exists."
+                )
+            }
+            routes.append(route)
+            if state.simulationPhase == .running,
+               !state.networkRuntime.replaceManualRoutes(nodeID: nodeID, routes: routes) {
+                throw RuntimeWebAdministrationApplicationError.runtimeReconfigurationFailed(
+                    "The running routing table could not be updated."
+                )
+            }
+            state.runtimeManualRoutesByNodeID[nodeID] = routes
+            return true
+
+        case let .deleteRoute(id):
+            guard nodeKind == .router || nodeKind == .gateway else {
+                throw RuntimeWebAdministrationApplicationError.unsupportedMutation(
+                    "Route administration is supported only by Router and Gateway nodes."
+                )
+            }
+            guard !id.hasPrefix("rip-") else {
+                throw RuntimeWebAdministrationApplicationError.unsupportedMutation(
+                    "RIP-learned routes cannot be deleted through web administration."
+                )
+            }
+            var routes = state.runtimeManualRoutesByNodeID[nodeID] ?? []
+            let index = try runtimeWebAdministrationIndex(
+                id: id,
+                prefix: "manual-",
+                count: routes.count,
+                entryName: "manual route"
+            )
+            routes.remove(at: index)
+            if state.simulationPhase == .running,
+               !state.networkRuntime.replaceManualRoutes(nodeID: nodeID, routes: routes) {
+                throw RuntimeWebAdministrationApplicationError.runtimeReconfigurationFailed(
+                    "The running routing table could not be updated."
+                )
+            }
+            if routes.isEmpty {
+                state.runtimeManualRoutesByNodeID.removeValue(forKey: nodeID)
+            } else {
+                state.runtimeManualRoutesByNodeID[nodeID] = routes
+            }
+            return true
+
+        case let .updateDHCP(mutation):
+            guard nodeKind == .gateway else {
+                throw RuntimeWebAdministrationApplicationError.unsupportedMutation(
+                    "DHCP web administration is supported only by Gateway nodes."
+                )
+            }
+            let existing = state.runtimeDHCPServerConfigurationsByNodeID[nodeID]
+                ?? TopologyDHCPServerConfiguration()
+            let configuration = TopologyDHCPServerConfiguration(
+                isActive: mutation.isActive,
+                lowerBoundIPAddress: mutation.lowerBoundIPAddress,
+                upperBoundIPAddress: mutation.upperBoundIPAddress,
+                gatewayIPAddress: mutation.gatewayIPAddress,
+                dnsServerIPAddress: mutation.dnsServerIPAddress,
+                useOwnSettings: mutation.usesOwnSettings,
+                staticAssignments: existing.staticAssignments
+            )
+            if state.simulationPhase == .running {
+                switch state.networkRuntime.reconfigureDHCPServer(
+                    nodeID: nodeID,
+                    configuration: configuration
+                ) {
+                case .success:
+                    break
+                case let .failure(error):
+                    throw RuntimeWebAdministrationApplicationError.runtimeReconfigurationFailed(
+                        error.localizedDescription
+                    )
+                }
+            }
+            state.runtimeDHCPServerConfigurationsByNodeID[nodeID] = configuration
+            return true
+
+        case let .addPortForward(mutation):
+            guard nodeKind == .gateway else {
+                throw RuntimeWebAdministrationApplicationError.unsupportedMutation(
+                    "Port forwarding is supported only by Gateway nodes."
+                )
+            }
+            let protocolValue = mutation.protocolKind == .tcp ? "TCP" : "UDP"
+            let row = TopologyGatewayPortForwardingRow(
+                protocolValue: protocolValue,
+                publicPortValue: String(mutation.publicPort),
+                lanIPAddress: mutation.lanIPAddress,
+                lanPortValue: String(mutation.lanPort)
+            )
+            var rows = state.runtimePortForwardingRowsByNodeID[nodeID] ?? []
+            guard !rows.contains(where: {
+                $0.runtimeProtocol == row.runtimeProtocol && $0.runtimePublicPort == row.runtimePublicPort
+            }) else {
+                throw RuntimeWebAdministrationApplicationError.conflictingEntry(
+                    "A port forward already owns that protocol and public port."
+                )
+            }
+            rows.append(row)
+            state.runtimePortForwardingRowsByNodeID[nodeID] = rows
+            if state.simulationPhase == .running {
+                state.networkRuntime.setStaticPortForwardingRows(gatewayNodeID: nodeID, rows: rows)
+            }
+            return true
+
+        case let .deletePortForward(id):
+            guard nodeKind == .gateway else {
+                throw RuntimeWebAdministrationApplicationError.unsupportedMutation(
+                    "Port forwarding is supported only by Gateway nodes."
+                )
+            }
+            var rows = state.runtimePortForwardingRowsByNodeID[nodeID] ?? []
+            let index = try runtimeWebAdministrationIndex(
+                id: id,
+                prefix: "port-forward-",
+                count: rows.count,
+                entryName: "port forward"
+            )
+            rows.remove(at: index)
+            if rows.isEmpty {
+                state.runtimePortForwardingRowsByNodeID.removeValue(forKey: nodeID)
+            } else {
+                state.runtimePortForwardingRowsByNodeID[nodeID] = rows
+            }
+            if state.simulationPhase == .running {
+                state.networkRuntime.setStaticPortForwardingRows(gatewayNodeID: nodeID, rows: rows)
+            }
+            return true
+
+        case .clearNATMappings:
+            guard nodeKind == .gateway else {
+                throw RuntimeWebAdministrationApplicationError.unsupportedMutation(
+                    "NAT mapping administration is supported only by Gateway nodes."
+                )
+            }
+            state.networkRuntime.clearDynamicNATMappings(gatewayNodeID: nodeID)
+            return false
+
+        case let .updateFirewall(mutation):
+            guard nodeKind == .router || nodeKind == .gateway else {
+                throw RuntimeWebAdministrationApplicationError.unsupportedMutation(
+                    "Firewall web administration is supported only by Router and Gateway nodes."
+                )
+            }
+            let existing = state.runtimeFirewallConfigurationsByNodeID[nodeID]
+                ?? TopologyFirewallConfiguration()
+            let configuration = TopologyFirewallConfiguration(
+                isActive: mutation.isActive,
+                defaultPolicy: runtimeFirewallAction(mutation.defaultPolicy),
+                dropICMP: mutation.dropsICMP,
+                filterSYNSegmentsOnly: mutation.filtersSYNSegmentsOnly,
+                filterUDP: mutation.filtersUDP,
+                rules: existing.rules
+            )
+            state.runtimeFirewallConfigurationsByNodeID[nodeID] = configuration
+            if state.simulationPhase == .running {
+                state.networkRuntime.setFirewallConfiguration(nodeID: nodeID, configuration: configuration)
+            }
+            return true
+
+        case let .addFirewallRule(mutation):
+            guard nodeKind == .router || nodeKind == .gateway else {
+                throw RuntimeWebAdministrationApplicationError.unsupportedMutation(
+                    "Firewall web administration is supported only by Router and Gateway nodes."
+                )
+            }
+            let rule = TopologyFirewallRule(
+                sourceIPAddress: mutation.sourceIPAddress,
+                sourceSubnetMask: mutation.sourceSubnetMask,
+                destinationIPAddress: mutation.destinationIPAddress,
+                destinationSubnetMask: mutation.destinationSubnetMask,
+                port: mutation.port,
+                protocolType: runtimeFirewallProtocol(mutation.protocolKind),
+                action: runtimeFirewallAction(mutation.action)
+            )
+            var configuration = state.runtimeFirewallConfigurationsByNodeID[nodeID]
+                ?? TopologyFirewallConfiguration()
+            guard !configuration.rules.contains(rule) else {
+                throw RuntimeWebAdministrationApplicationError.conflictingEntry(
+                    "An identical firewall rule already exists."
+                )
+            }
+            configuration.rules.append(rule)
+            state.runtimeFirewallConfigurationsByNodeID[nodeID] = configuration
+            if state.simulationPhase == .running {
+                state.networkRuntime.setFirewallConfiguration(nodeID: nodeID, configuration: configuration)
+            }
+            return true
+
+        case let .deleteFirewallRule(id):
+            guard nodeKind == .router || nodeKind == .gateway else {
+                throw RuntimeWebAdministrationApplicationError.unsupportedMutation(
+                    "Firewall web administration is supported only by Router and Gateway nodes."
+                )
+            }
+            var configuration = state.runtimeFirewallConfigurationsByNodeID[nodeID]
+                ?? TopologyFirewallConfiguration()
+            let index = try runtimeWebAdministrationIndex(
+                id: id,
+                prefix: "rule-",
+                count: configuration.rules.count,
+                entryName: "firewall rule"
+            )
+            configuration.rules.remove(at: index)
+            state.runtimeFirewallConfigurationsByNodeID[nodeID] = configuration
+            if state.simulationPhase == .running {
+                state.networkRuntime.setFirewallConfiguration(nodeID: nodeID, configuration: configuration)
+            }
+            return true
+        }
+    }
+
+    private static func runtimeWebAdministrationIndex(
+        id: String,
+        prefix: String,
+        count: Int,
+        entryName: String
+    ) throws -> Int {
+        guard id.hasPrefix(prefix),
+              let index = Int(id.dropFirst(prefix.count)),
+              index >= 0,
+              index < count
+        else {
+            throw RuntimeWebAdministrationApplicationError.entryNotFound(
+                "The requested \(entryName) does not exist."
+            )
+        }
+        return index
+    }
+
+    private static func runtimeFirewallProtocol(
+        _ value: TopologyRuntimeWebAdministrationFirewallProtocol
+    ) -> TopologyFirewallProtocol {
+        switch value {
+        case .all: return .all
+        case .icmp: return .icmp
+        case .tcp: return .tcp
+        case .udp: return .udp
+        }
+    }
+
+    private static func runtimeFirewallAction(
+        _ value: TopologyRuntimeWebAdministrationFirewallAction
+    ) -> TopologyFirewallAction {
+        switch value {
+        case .accept: return .accept
+        case .drop: return .drop
+        }
+    }
+
+    private static func runtimeWebAdministrationStatusCode(
+        for error: TopologyRuntimeWebAdministrationMutationError
+    ) -> Int {
+        switch error {
+        case .accessDenied:
+            return 403
+        case .methodNotAllowed:
+            return 405
+        case .unknownAction:
+            return 404
+        case .missingFields, .unexpectedFields, .invalidField, .invalidAddressRange:
+            return 400
+        }
+    }
+
+    private static func runtimeWebAdministrationMutationDetail(
+        _ intent: TopologyRuntimeWebAdministrationMutationIntent
+    ) -> String {
+        switch intent {
+        case .addRoute: return "routeAdded"
+        case .deleteRoute: return "routeDeleted"
+        case .updateDHCP: return "dhcpUpdated"
+        case .addPortForward: return "portForwardAdded"
+        case .deletePortForward: return "portForwardDeleted"
+        case .clearNATMappings: return "natMappingsCleared"
+        case .updateFirewall: return "firewallUpdated"
+        case .addFirewallRule: return "firewallRuleAdded"
+        case .deleteFirewallRule: return "firewallRuleDeleted"
+        }
+    }
+
+    private static func runtimeWebAdministrationMutationResponse(
+        statusCode: Int,
+        title: String,
+        detail: String
+    ) -> TopologyRuntimeWebAdministrationResponse {
+        TopologyRuntimeWebAdministrationResponse(
+            statusCode: statusCode,
+            contentType: "text/plain; charset=utf-8",
+            body: "\(title)\n\(detail)\n",
+            detail: detail
+        )
+    }
+
+
     private static func cleanupRuntimeProgram(
         _ program: TopologyRuntimeInstallableProgram,
         nodeID: UUID,
@@ -3819,6 +4984,7 @@ enum TopologyEditorReducer {
             if state.runtimeDNSServerSocketIDByNodeID.removeValue(forKey: nodeID) != nil {
                 state.networkRuntime.stopDNSServer(nodeID: nodeID)
             }
+            state.invalidateRuntimeDNSCache()
         case .dhcpServer:
             break
         case .firewall:
@@ -3853,8 +5019,13 @@ enum TopologyEditorReducer {
         state.runtimeDNSServerConfigurationsByNodeID.removeValue(forKey: nodeID)
         state.runtimeDNSServerSocketIDByNodeID.removeValue(forKey: nodeID)
         state.runtimeDNSCacheByNodeID.removeValue(forKey: nodeID)
+        state.runtimeTypedDNSResolverCacheByNodeID.removeValue(forKey: nodeID)
+        state.invalidateRuntimeDNSCache()
         state.runtimeWebServerByNodeID.removeValue(forKey: nodeID)
         state.runtimeWebServerConfigurationsByNodeID.removeValue(forKey: nodeID)
+        state.runtimeWebAdministrationConfigurationsByNodeID.removeValue(forKey: nodeID)
+        state.runtimeWebAdministrationByNodeID.removeValue(forKey: nodeID)
+        state.runtimeWebAdministrationResponsesByNodeID.removeValue(forKey: nodeID)
         state.runtimeWebBrowserConfigurationsByNodeID.removeValue(forKey: nodeID)
         state.runtimeWebServerRequestLogsByNodeID.removeValue(forKey: nodeID)
         state.runtimeWebBrowserStateByNodeID.removeValue(forKey: nodeID)
@@ -3870,6 +5041,7 @@ enum TopologyEditorReducer {
         state.runtimeGnutellaFileStoresByNodeID.removeValue(forKey: nodeID)
         state.runtimeEchoServerByNodeID.removeValue(forKey: nodeID)
         state.runtimeWebServerSocketIDByNodeID.removeValue(forKey: nodeID)
+        state.runtimeWebAdministrationSocketIDByNodeID.removeValue(forKey: nodeID)
         state.runtimeEchoServerSocketIDByNodeID.removeValue(forKey: nodeID)
         state.runtimeEchoServerUDPSocketIDByNodeID.removeValue(forKey: nodeID)
         state.runtimeEchoServerServiceStateByNodeID.removeValue(forKey: nodeID)
@@ -3910,11 +5082,15 @@ enum TopologyEditorReducer {
         state.runtimeDHCPLeaseByNodeID.removeAll()
         state.runtimeDNSServerSocketIDByNodeID.removeAll()
         state.runtimeDNSCacheByNodeID.removeAll()
+        state.runtimeTypedDNSResolverCacheByNodeID.removeAll()
         state.runtimeWebServerByNodeID.removeAll()
+        state.runtimeWebAdministrationByNodeID.removeAll()
+        state.runtimeWebAdministrationResponsesByNodeID.removeAll()
         state.runtimeWebServerRequestLogsByNodeID.removeAll()
         state.runtimeWebBrowserStateByNodeID.removeAll()
         state.runtimeEchoServerByNodeID.removeAll()
         state.runtimeWebServerSocketIDByNodeID.removeAll()
+        state.runtimeWebAdministrationSocketIDByNodeID.removeAll()
         state.runtimeEchoServerSocketIDByNodeID.removeAll()
         state.runtimeEchoServerUDPSocketIDByNodeID.removeAll()
         state.runtimeEchoServerServiceStateByNodeID.removeAll()
@@ -4368,7 +5544,7 @@ enum TopologyEditorReducer {
             nodeID: nodeID,
             configuration: savedConfiguration
         )
-        state.runtimeDNSCacheByNodeID.removeValue(forKey: nodeID)
+        state.invalidateRuntimeDNSCache()
         state.lastRuntimeFault = nil
         advancePersistenceRevision(state: &state)
         recordRuntimeEvent(
@@ -5173,6 +6349,126 @@ enum TopologyEditorReducer {
         )
     }
 
+    private static func executeDNSRegisterTypedCommand(
+        state: inout TopologyEditorState,
+        sourceNodeID: UUID,
+        record: TopologyDNSResourceRecord
+    ) {
+        let previousConfiguration = state.runtimeDNSServerConfigurationsByNodeID[sourceNodeID]
+        var configuration = previousConfiguration ?? TopologyRuntimeDNSServerConfiguration()
+        configuration.addTypedRecord(record)
+        state.runtimeDNSServerConfigurationsByNodeID[sourceNodeID] = configuration
+        do {
+            try state.mirrorRuntimeDNSConfigurationToHostsFile(nodeID: sourceNodeID)
+        } catch {
+            state.runtimeDNSServerConfigurationsByNodeID[sourceNodeID] = previousConfiguration
+            setDNSFailure(
+                state: &state, sourceNodeID: sourceNodeID,
+                eventCode: .dnsServerRejectedInvalidConfiguration,
+                faultCategory: .runtimeFault, faultCode: "dnsHostsFileWriteFailed",
+                message: "DNS records could not be synchronized with /dns/hosts",
+                detail: "dnsHostsFileWriteFailed"
+            )
+            return
+        }
+        state.invalidateRuntimeDNSCache(hostname: record.name.rawValue)
+        state.lastRuntimeFault = nil
+        advancePersistenceRevision(state: &state)
+        recordRuntimeEvent(
+            state: &state,
+            code: .dnsRecordRegistered,
+            detail: "serverNode=\(sourceNodeID.uuidString),type=\(record.type.rawValue),name=\(record.name.rawValue),target=\(record.target),ttl=\(record.ttlSeconds)"
+        )
+        appendConsoleLine(
+            state: &state,
+            nodeID: sourceNodeID,
+            line: "DNS \(record.type.rawValue) record registered: \(record.name.rawValue) -> \(record.target)"
+        )
+    }
+
+    private static func executeDNSRemoveTypedCommand(
+        state: inout TopologyEditorState,
+        sourceNodeID: UUID,
+        hostname: String,
+        recordType: TopologyDNSRecordType,
+        target: String
+    ) {
+        let previousConfiguration = state.runtimeDNSServerConfigurationsByNodeID[sourceNodeID]
+        var configuration = previousConfiguration
+        let removed = configuration?.removeTypedRecord(
+            hostname: hostname,
+            recordType: recordType,
+            target: target
+        ) == true
+        guard removed, let configuration else {
+            setDNSFailure(
+                state: &state, sourceNodeID: sourceNodeID,
+                eventCode: .dnsRecordRejectedUnknownHost, faultCategory: .networkService,
+                faultCode: "dnsUnknownRecord",
+                message: "No matching DNS record exists for '\(hostname)'",
+                detail: "dnsUnknownRecord"
+            )
+            return
+        }
+        state.runtimeDNSServerConfigurationsByNodeID[sourceNodeID] = configuration
+        do {
+            try state.mirrorRuntimeDNSConfigurationToHostsFile(nodeID: sourceNodeID)
+        } catch {
+            state.runtimeDNSServerConfigurationsByNodeID[sourceNodeID] = previousConfiguration
+            setDNSFailure(
+                state: &state, sourceNodeID: sourceNodeID,
+                eventCode: .dnsServerRejectedInvalidConfiguration,
+                faultCategory: .runtimeFault, faultCode: "dnsHostsFileWriteFailed",
+                message: "DNS records could not be synchronized with /dns/hosts",
+                detail: "dnsHostsFileWriteFailed"
+            )
+            return
+        }
+        state.invalidateRuntimeDNSCache(hostname: hostname)
+        state.lastRuntimeFault = nil
+        advancePersistenceRevision(state: &state)
+        recordRuntimeEvent(
+            state: &state,
+            code: .dnsRecordRemoved,
+            detail: "serverNode=\(sourceNodeID.uuidString),type=\(recordType.rawValue),name=\(hostname),target=\(target)"
+        )
+        appendConsoleLine(state: &state, nodeID: sourceNodeID, line: "DNS \(recordType.rawValue) record removed: \(hostname) -> \(target)")
+    }
+
+    private static func executeDNSResolveTypedCommand(
+        state: inout TopologyEditorState,
+        sourceNodeID: UUID,
+        hostname: String,
+        recordType: TopologyDNSRecordType
+    ) {
+        let resolution = state.resolveRuntimeDNSQuestion(
+            nodeID: sourceNodeID,
+            hostname: hostname,
+            recordType: recordType
+        )
+        switch resolution {
+        case let .success(answer):
+            state.lastRuntimeFault = nil
+            let values = answer.records.map { "\($0.type.rawValue)=\($0.target)" }.joined(separator: ",")
+            recordRuntimeEvent(
+                state: &state,
+                code: .dnsResolveSucceeded,
+                detail: "host=\(hostname),type=\(recordType.rawValue),answers=\(values),server=\(answer.respondingServerIPAddress),hops=\(answer.trace.hopCount)"
+            )
+            appendConsoleLine(
+                state: &state,
+                nodeID: sourceNodeID,
+                line: "DNS resolved \(recordType.rawValue) \(hostname) -> \(values) via \(answer.respondingServerIPAddress)"
+            )
+        case .nameError:
+            setDNSFailure(state: &state, sourceNodeID: sourceNodeID, eventCode: .dnsResolveRejectedUnknownHost, faultCategory: .networkService, faultCode: "dnsNXDOMAIN", message: "DNS returned NXDOMAIN for '\(hostname)'", detail: "dnsNXDOMAIN")
+        case .noData:
+            setDNSFailure(state: &state, sourceNodeID: sourceNodeID, eventCode: .dnsResolveRejectedUnknownHost, faultCategory: .networkService, faultCode: "dnsNoData", message: "DNS returned no \(recordType.rawValue) data for '\(hostname)'", detail: "dnsNoData")
+        case let .failure(failure, trace):
+            setDNSFailure(state: &state, sourceNodeID: sourceNodeID, eventCode: .dnsResolveRejectedUnreachable, faultCategory: .networkService, faultCode: "dnsResolutionFailed", message: "DNS resolution failed after \(trace.hopCount) hops: \(failure)", detail: "dnsResolutionFailed")
+        }
+    }
+
     private static func executeDNSRegisterCommand(
         state: inout TopologyEditorState,
         sourceNodeID: UUID,
@@ -5193,7 +6489,7 @@ enum TopologyEditorReducer {
         let record = TopologyRuntimeDNSRecord(hostname: normalizedHost, targetIPAddress: targetIPAddress)
         let previousConfiguration = state.runtimeDNSServerConfigurationsByNodeID[sourceNodeID]
         var configuration = previousConfiguration ?? TopologyRuntimeDNSServerConfiguration()
-        configuration.recordsByHostname[normalizedHost] = record
+        configuration.appendLegacyAddressRecord(record)
         state.runtimeDNSServerConfigurationsByNodeID[sourceNodeID] = configuration
         do {
             try state.mirrorRuntimeDNSConfigurationToHostsFile(nodeID: sourceNodeID)
@@ -5224,9 +6520,17 @@ enum TopologyEditorReducer {
     ) {
         let normalizedHost = hostname.lowercased()
         let previousConfiguration = state.runtimeDNSServerConfigurationsByNodeID[sourceNodeID]
-        guard var configuration = previousConfiguration,
-              configuration.recordsByHostname.removeValue(forKey: normalizedHost) != nil
-        else {
+        guard var configuration = previousConfiguration else {
+            setDNSFailure(
+                state: &state, sourceNodeID: sourceNodeID,
+                eventCode: .dnsRecordRejectedUnknownHost, faultCategory: .networkService,
+                faultCode: "dnsUnknownHost",
+                message: "No DNS record exists for host '\(normalizedHost)' on this server",
+                detail: "dnsUnknownHost"
+            )
+            return
+        }
+        guard configuration.removeLegacyAddressRecord(hostname: normalizedHost) != nil else {
             setDNSFailure(
                 state: &state, sourceNodeID: sourceNodeID,
                 eventCode: .dnsRecordRejectedUnknownHost, faultCategory: .networkService,
@@ -6358,6 +7662,38 @@ enum TopologyEditorReducer {
             guard parts.count == 1 else { return .malformed(command: "tcpdump", reason: "Usage: tcpdump") }
             return .success(.tcpdump)
 
+        case "webadmin", "webadministration":
+            guard parts.count >= 2 else {
+                return .malformed(command: "webadmin", reason: "Usage: webadmin status|on|off|clear|allow <network> <mask>|revoke <network> <mask>")
+            }
+            switch parts[1].lowercased() {
+            case "status":
+                guard parts.count == 2 else { return .malformed(command: "webadmin", reason: "Usage: webadmin status") }
+                return .success(.webAdministrationStatus)
+            case "on", "enable":
+                guard parts.count == 2 else { return .malformed(command: "webadmin", reason: "Usage: webadmin on") }
+                return .success(.webAdministrationSetEnabled(true))
+            case "off", "disable":
+                guard parts.count == 2 else { return .malformed(command: "webadmin", reason: "Usage: webadmin off") }
+                return .success(.webAdministrationSetEnabled(false))
+            case "clear":
+                guard parts.count == 2 else { return .malformed(command: "webadmin", reason: "Usage: webadmin clear") }
+                return .success(.webAdministrationClearNetworks)
+            case "allow", "revoke":
+                guard parts.count == 4,
+                      let network = normalizedIPv4Address(parts[2]),
+                      let mask = normalizedSubnetMask(parts[3])
+                else {
+                    return .malformed(command: "webadmin", reason: "Usage: webadmin \(parts[1].lowercased()) <network> <mask>")
+                }
+                if parts[1].lowercased() == "allow" {
+                    return .success(.webAdministrationAllow(networkAddress: network, subnetMask: mask))
+                }
+                return .success(.webAdministrationRevoke(networkAddress: network, subnetMask: mask))
+            default:
+                return .malformed(command: "webadmin", reason: "Usage: webadmin status|on|off|clear|allow <network> <mask>|revoke <network> <mask>")
+            }
+
         case "dhcp":
             guard parts.count >= 2 else {
                 return .malformed(
@@ -6885,10 +8221,18 @@ private extension TopologyEditorAction {
             return "stopSimulation"
         case .setSimulationSpeed:
             return "setSimulationSpeed"
+        case .setGlobalPacketLoss:
+            return "setGlobalPacketLoss"
         case .simulationTick:
             return "simulationTick"
         case .simulationFault:
             return "simulationFault"
+        case .setLANRemoteLinkConnectionState:
+            return "setLANRemoteLinkConnectionState"
+        case .completeLANRemoteLinkOutboundFrame:
+            return "completeLANRemoteLinkOutboundFrame"
+        case .receiveLANRemoteLinkFrame:
+            return "receiveLANRemoteLinkFrame"
         case .openRuntimeDevice:
             return "openRuntimeDevice"
         case .closeRuntimeDevice:
@@ -6917,6 +8261,12 @@ private extension TopologyEditorAction {
             return "resetRuntimePacketCapture"
         case .saveRuntimePortForwardingRows:
             return "saveRuntimePortForwardingRows"
+        case .saveRuntimeWebAdministrationConfiguration:
+            return "saveRuntimeWebAdministrationConfiguration"
+        case .saveRuntimeWebAdministrationPolicy:
+            return "saveRuntimeWebAdministrationPolicy"
+        case .runtimeWebAdministrationRequest:
+            return "runtimeWebAdministrationRequest"
         case .installRuntimeProgram:
             return "installRuntimeProgram"
         case .uninstallRuntimeProgram:
@@ -6955,16 +8305,30 @@ private extension TopologyEditorAction {
             return "runtimeDNSStop"
         case .runtimeDNSAddRecord:
             return "runtimeDNSAddRecord"
+        case .runtimeDNSAddTypedRecord:
+            return "runtimeDNSAddTypedRecord"
         case .runtimeDNSRemoveRecord:
             return "runtimeDNSRemoveRecord"
+        case .runtimeDNSRemoveTypedRecord:
+            return "runtimeDNSRemoveTypedRecord"
+        case .runtimeDNSSetRecursion:
+            return "runtimeDNSSetRecursion"
         case .runtimeDNSResolveRecord:
             return "runtimeDNSResolveRecord"
+        case .runtimeDNSResolveTypedRecord:
+            return "runtimeDNSResolveTypedRecord"
+        case .saveRuntimeWebServerConfiguration:
+            return "saveRuntimeWebServerConfiguration"
         case .runtimeWebStart:
             return "runtimeWebStart"
         case .runtimeWebStop:
             return "runtimeWebStop"
         case .runtimeWebRestart:
             return "runtimeWebRestart"
+        case .runtimeWebAdministrationStart:
+            return "runtimeWebAdministrationStart"
+        case .runtimeWebAdministrationStop:
+            return "runtimeWebAdministrationStop"
         case .runtimeWebBrowserNavigate:
             return "runtimeWebBrowserNavigate"
         case .runtimeWebBrowserBack:
@@ -6997,6 +8361,8 @@ private extension TopologyEditorAction {
             return "runtimeEmailClientSend"
         case .runtimeEmailClientRetrieve:
             return "runtimeEmailClientRetrieve"
+        case .runtimeEmailClientDeleteMessages:
+            return "runtimeEmailClientDeleteMessages"
         case .saveRuntimeGnutellaConfiguration:
             return "saveRuntimeGnutellaConfiguration"
         case .runtimeGnutellaJoin:

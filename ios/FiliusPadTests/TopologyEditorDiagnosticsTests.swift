@@ -1,4 +1,6 @@
 import CoreGraphics
+import SwiftUI
+import UIKit
 import XCTest
 @testable import FiliusPad
 
@@ -861,6 +863,10 @@ final class TopologyEditorDiagnosticsTests: XCTestCase {
         state.remoteLinkConfigurationsByNodeID[third] = TopologyRemoteLinkConfiguration(pairIdentifier: "classroom-a")
         XCTAssertEqual(state.remoteLinkVisualState(for: first), .ambiguous)
 
+        state.remoteLinkConfigurationsByNodeID[first]?.transportMode = .localNetwork
+        XCTAssertEqual(state.remoteLinkVisualState(for: first), .unpaired)
+        state.remoteLinkConfigurationsByNodeID[first]?.transportMode = .inProject
+
         state.remoteLinkConfigurationsByNodeID[first]?.isEnabled = false
         XCTAssertEqual(state.remoteLinkVisualState(for: first), .disabled)
         XCTAssertEqual(state.remoteLinkVisualState(for: second), .active)
@@ -979,6 +985,158 @@ final class TopologyDesignDeviceConfigurationDraftTests: XCTestCase {
     }
 }
 
+final class TopologyRemoteLinkLANReleaseGateTests: XCTestCase {
+    func testDisabledPolicyHidesLocalNetworkTransportAndBuildsNoEndpoints() {
+        let nodeID = UUID()
+        var node = TopologyNode(
+            id: nodeID,
+            kind: .remoteLink,
+            displayName: "Classroom Link",
+            position: CGPoint(x: 40, y: 40)
+        )
+        node.ports[0].isOccupied = true
+        let configuration = TopologyRemoteLinkConfiguration(
+            pairIdentifier: "classroom-release-gate",
+            latencyMilliseconds: 75,
+            isEnabled: true,
+            transportMode: .localNetwork,
+            lanRole: .join,
+            lanPort: 12_345,
+            lanJoinMethod: .manual,
+            lanRemoteHost: "192.168.1.42",
+            lanRemotePort: 23_456
+        )
+        let configurations = [nodeID: configuration]
+
+        XCTAssertFalse(TopologyRemoteLinkLANReleaseGate.disabled.isEnabled)
+        XCTAssertEqual(
+            TopologyRemoteLinkLANReleaseGate.disabled.selectableTransportModes,
+            [.inProject]
+        )
+        XCTAssertTrue(
+            TopologyRemoteLinkLANReleaseGate.disabled.endpointConfigurations(
+                nodes: [node],
+                configurationsByNodeID: configurations
+            ).isEmpty
+        )
+        XCTAssertEqual(configurations[nodeID], configuration)
+    }
+
+    func testEnabledPolicyBuildsEndpointForAutomatedLANCoverage() throws {
+        let nodeID = UUID()
+        var node = TopologyNode(
+            id: nodeID,
+            kind: .remoteLink,
+            displayName: "Classroom Link",
+            position: CGPoint(x: 40, y: 40)
+        )
+        node.ports[0].isOccupied = true
+        let configuration = TopologyRemoteLinkConfiguration(
+            pairIdentifier: "classroom-debug-link",
+            latencyMilliseconds: 75,
+            isEnabled: true,
+            transportMode: .localNetwork,
+            lanRole: .join,
+            lanPort: 12_345,
+            lanJoinMethod: .manual,
+            lanRemoteHost: "192.168.1.42",
+            lanRemotePort: 23_456
+        )
+
+        let endpoint = try XCTUnwrap(
+            TopologyRemoteLinkLANReleaseGate.Policy(isEnabled: true)
+                .endpointConfigurations(
+                    nodes: [node],
+                    configurationsByNodeID: [nodeID: configuration]
+                )
+                .first
+        )
+
+        XCTAssertEqual(endpoint.nodeID, nodeID)
+        XCTAssertEqual(endpoint.endpointName, "Classroom Link-\(nodeID.uuidString.prefix(6))")
+        XCTAssertEqual(endpoint.linkCode, "classroom-debug-link")
+        XCTAssertEqual(endpoint.role, .join)
+        XCTAssertEqual(endpoint.listenPort, 12_345)
+        XCTAssertEqual(endpoint.joinMethod, .manual)
+        XCTAssertEqual(endpoint.remoteHost, "192.168.1.42")
+        XCTAssertEqual(endpoint.remotePort, 23_456)
+    }
+
+    func testDisabledPolicyAllowsPersistedLocalNetworkDraftToRemainUnchanged() throws {
+        let nodeID = UUID()
+        let node = TopologyNode(id: nodeID, kind: .remoteLink, position: CGPoint(x: 40, y: 40))
+        let persisted = TopologyRemoteLinkConfiguration(
+            pairIdentifier: "saved-ipad-link",
+            latencyMilliseconds: 125,
+            isEnabled: true,
+            transportMode: .localNetwork,
+            lanRole: .join,
+            lanPort: 12_345,
+            lanJoinMethod: .manual,
+            lanRemoteHost: "",
+            lanRemotePort: 23_456
+        )
+        let draft = TopologyDesignDeviceConfigurationDraft(
+            node: node,
+            deviceConfiguration: nil,
+            interfaceConfigurations: [],
+            switchConfiguration: nil,
+            remoteLinkConfiguration: persisted,
+            hostWirelessConfiguration: TopologyHostWirelessConfiguration(),
+            availableSSIDs: []
+        )
+
+        XCTAssertTrue(
+            draft.isValid(
+                for: node,
+                availableSSIDs: [],
+                lanReleasePolicy: .init(isEnabled: false)
+            )
+        )
+        XCTAssertEqual(try XCTUnwrap(draft.remoteLinkConfiguration(for: node)), persisted)
+    }
+
+    func testReleaseGateSourceContractCentralizesBuildFlagAndGuardsReconcileAndPicker() throws {
+        let source = try String(contentsOf: editorViewURL, encoding: .utf8)
+
+        XCTAssertFalse(source.contains("#if DEBUG"))
+        XCTAssertTrue(source.contains("static let current = Policy(isEnabled: _isDebugAssertConfiguration())"))
+        XCTAssertTrue(source.contains("guard TopologyRemoteLinkLANReleaseGate.current.isEnabled else"))
+        XCTAssertTrue(source.contains("TopologyRemoteLinkLANReleaseGate.current.endpointConfigurations("))
+        XCTAssertTrue(source.contains("private func flushLANRemoteLinkOutboundFrames() {\n        guard TopologyRemoteLinkLANReleaseGate.current.isEnabled else { return }"))
+        XCTAssertTrue(source.contains("if TopologyRemoteLinkLANReleaseGate.current.isEnabled {\n                Picker"))
+        XCTAssertTrue(source.contains("remoteLink.localNetwork.releaseGate.detail"))
+        XCTAssertTrue(source.contains("design.configuration.remote-link.local-network-release-gate.notice"))
+    }
+
+    func testReleaseGateExplanationIsLocalizedForEverySupportedLanguage() throws {
+        for locale in ["en", "de", "fr"] {
+            let source = try String(contentsOf: localizationURL(locale: locale), encoding: .utf8)
+            for key in [
+                "remoteLink.localNetwork.releaseGate.title",
+                "remoteLink.localNetwork.releaseGate.detail",
+                "remoteLink.localNetwork.releaseGate.useInProject",
+            ] {
+                XCTAssertTrue(source.contains("\"\(key)\" = \""), "Missing \(key) in \(locale)")
+            }
+        }
+    }
+
+    private var editorViewURL: URL {
+        repositoryIOSURL.appendingPathComponent("FiliusPad/TopologyEditor/View/TopologyEditorView.swift")
+    }
+
+    private func localizationURL(locale: String) -> URL {
+        repositoryIOSURL.appendingPathComponent("FiliusPad/Resources/\(locale).lproj/Localizable.strings")
+    }
+
+    private var repositoryIOSURL: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+}
+
 final class TopologyDenseLayoutPolicyTests: XCTestCase {
     func testDenseDataPresentationUsesCompactLayoutAtMultitaskingWidth() {
         XCTAssertTrue(TopologyDenseLayoutPolicy.usesCompactPresentation(width: 512))
@@ -1024,6 +1182,33 @@ final class TopologyAppPreferencesTests: XCTestCase {
 }
 
 final class TopologyParityAssetLoaderTests: XCTestCase {
+    @MainActor
+    func testRemoteLinkSymbolRendersBundledJavaModemArtwork() throws {
+        let relativePath = RemoteLinkSymbolView.parityArtworkRelativePath
+        let expected = try XCTUnwrap(TopologyParityAssetLoader.load(relativePath: relativePath))
+        let renderer = ImageRenderer(
+            content: RemoteLinkSymbolView(status: nil)
+                .frame(width: expected.size.width, height: expected.size.height)
+        )
+        renderer.scale = 1
+        let actual = try XCTUnwrap(renderer.uiImage)
+
+        XCTAssertEqual(relativePath, "hardware/modem.png")
+        XCTAssertEqual(actual.size, expected.size)
+
+        let expectedBytes = try rgbaBytes(from: expected)
+        let actualBytes = try rgbaBytes(from: actual)
+        let difference = zip(expectedBytes, actualBytes).reduce(0.0) { total, pair in
+            total + abs(Double(pair.0) - Double(pair.1))
+        }
+        let maximumDifference = Double(expectedBytes.count * 255)
+        XCTAssertGreaterThanOrEqual(
+            1 - (difference / maximumDifference),
+            0.99,
+            "The placed Remote Link should render the same Java modem artwork as the palette"
+        )
+    }
+
     override func setUp() {
         super.setUp()
         TopologyParityAssetLoader.resetCacheForTesting()
@@ -1051,6 +1236,28 @@ final class TopologyParityAssetLoaderTests: XCTestCase {
             TopologyParityAssetLoader.decodeAttemptCountForTesting(relativePath: relativePath),
             1
         )
+    }
+
+    private func rgbaBytes(from image: UIImage) throws -> [UInt8] {
+        let cgImage = try XCTUnwrap(image.cgImage)
+        let width = cgImage.width
+        let height = cgImage.height
+        let bytesPerRow = width * 4
+        var bytes = [UInt8](repeating: 0, count: bytesPerRow * height)
+        let context = try XCTUnwrap(
+            CGContext(
+                data: &bytes,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        )
+        context.interpolationQuality = .none
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return bytes
     }
 }
 
@@ -1170,6 +1377,7 @@ final class TopologyEditorUndoCoordinatorTests: XCTestCase {
         XCTAssertNotNil(TopologyEditorAction.saveDesignDeviceConfiguration(
             nodeID: UUID(),
             displayName: "PC",
+            hostLabelPolicy: nil,
             deviceConfiguration: nil,
             interfaceConfigurations: nil,
             switchConfiguration: nil,

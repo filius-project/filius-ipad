@@ -66,6 +66,7 @@ struct TopologyProductInformationSheet: View {
     let metadata: TopologyProductMetadata
 
     @Environment(\.dismiss) private var dismiss
+    @State private var selectedLegalDocument: TopologyLegalDocument?
 
     var body: some View {
         NavigationStack {
@@ -93,14 +94,33 @@ struct TopologyProductInformationSheet: View {
                     LabeledContent(FiliusLocalization.t("ui.312386841084"), value: metadata.repositoryName)
                     LabeledContent(FiliusLocalization.t("ui.a0dcbd4b0c9d"), value: FiliusLocalization.t("product.license"))
                     LabeledContent(
+                        FiliusLocalization.t("product.additionalPermission"),
+                        value: FiliusLocalization.t("product.additionalPermissionEffectiveDate")
+                    )
+                    LabeledContent(
                         FiliusLocalization.t("product.repositoryEvidence"),
                         value: TopologyProductMetadata.repositoryLicenseEvidenceFiles.joined(separator: ", ")
                     )
+                    Text(FiliusLocalization.t("product.attribution"))
+                        .font(.footnote.weight(.semibold))
+                    Text(FiliusLocalization.t("product.independentStatus"))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     Text(FiliusLocalization.t("product.licenseNote"))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
                 .accessibilityIdentifier("productShell.info.license")
+
+                Section(FiliusLocalization.t("product.legalTexts")) {
+                    ForEach(TopologyLegalDocument.allCases) { document in
+                        Button(document.title) {
+                            selectedLegalDocument = document
+                        }
+                        .accessibilityIdentifier("productShell.info.legal.\(document.rawValue)")
+                    }
+                }
+                .accessibilityIdentifier("productShell.info.legalTexts")
             }
             .navigationTitle(FiliusLocalization.t("ui.0eb5ed506e49"))
             .toolbar {
@@ -110,7 +130,77 @@ struct TopologyProductInformationSheet: View {
                 }
             }
         }
+        .sheet(item: $selectedLegalDocument) { document in
+            TopologyLegalDocumentSheet(document: document)
+        }
         .accessibilityIdentifier("productShell.info.sheet")
+    }
+}
+
+enum TopologyLegalDocument: String, CaseIterable, Identifiable {
+    case gplV2
+    case gplV3
+    case applePlatformPermission
+
+    var id: String { rawValue }
+
+    var filename: String {
+        switch self {
+        case .gplV2:
+            return "GPLv2.txt"
+        case .gplV3:
+            return "GPLv3.txt"
+        case .applePlatformPermission:
+            return "Apple-Platform-Additional-Permission.md"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .gplV2:
+            return FiliusLocalization.t("product.legal.gplV2")
+        case .gplV3:
+            return FiliusLocalization.t("product.legal.gplV3")
+        case .applePlatformPermission:
+            return FiliusLocalization.t("product.legal.applePermission")
+        }
+    }
+
+    var content: String {
+        let url = Bundle.main.url(forResource: filename, withExtension: nil)
+            ?? Bundle.main.url(forResource: filename, withExtension: nil, subdirectory: "Legal")
+        guard let url,
+              let contents = try? String(contentsOf: url, encoding: .utf8) else {
+            return FiliusLocalization.t("product.legal.unavailable", filename)
+        }
+        return contents
+    }
+}
+
+struct TopologyLegalDocumentSheet: View {
+    let document: TopologyLegalDocument
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(document.content)
+                    .font(.system(.footnote, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .navigationTitle(document.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(FiliusLocalization.t("ui.44424b18700e")) { dismiss() }
+                        .accessibilityIdentifier("productShell.info.legal.close")
+                }
+            }
+        }
+        .accessibilityIdentifier("productShell.info.legal.sheet.\(document.rawValue)")
     }
 }
 

@@ -2,8 +2,47 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+enum TopologyRemoteLinkLANReleaseGate {
+    struct Policy {
+        let isEnabled: Bool
+
+        var selectableTransportModes: [TopologyRemoteLinkTransportMode] {
+            isEnabled ? TopologyRemoteLinkTransportMode.allCases : [.inProject]
+        }
+
+        func endpointConfigurations(
+            nodes: [TopologyNode],
+            configurationsByNodeID: [UUID: TopologyRemoteLinkConfiguration]
+        ) -> [TopologyRemoteLinkLANEndpointConfiguration] {
+            guard isEnabled else { return [] }
+            return nodes.compactMap { node -> TopologyRemoteLinkLANEndpointConfiguration? in
+                guard node.kind == .remoteLink,
+                      node.ports.first?.isOccupied == true,
+                      let configuration = configurationsByNodeID[node.id],
+                      configuration.isEnabled,
+                      configuration.transportMode == .localNetwork
+                else { return nil }
+                return TopologyRemoteLinkLANEndpointConfiguration(
+                    nodeID: node.id,
+                    endpointName: "\(node.displayName)-\(node.id.uuidString.prefix(6))",
+                    linkCode: configuration.pairIdentifier,
+                    role: configuration.lanRole,
+                    listenPort: configuration.lanPort,
+                    joinMethod: configuration.lanJoinMethod,
+                    remoteHost: configuration.lanRemoteHost,
+                    remotePort: configuration.lanRemotePort
+                )
+            }
+        }
+    }
+
+    static let disabled = Policy(isEnabled: false)
+    static let current = Policy(isEnabled: _isDebugAssertConfiguration())
+}
+
 struct TopologyEditorView: View {
     @Environment(\.undoManager) private var systemUndoManager
+    @Environment(\.scenePhase) private var scenePhase
 
     @Binding var state: TopologyEditorState
     @Binding var appPreferences: TopologyAppPreferences
@@ -37,6 +76,10 @@ struct TopologyEditorView: View {
     @State private var documentationImageDocument: TopologyPNGFileDocument?
     @State private var isExportingDocumentationPDF = false
     @State private var documentationPDFDocument: TopologyPDFFileDocument?
+    @State private var isExportingDetailedReport = false
+    @State private var detailedReportDocument: TopologyTextFileDocument?
+    @State private var isExportingPacketCapture = false
+    @State private var packetCaptureDocument: TopologyTextFileDocument?
     @State private var projectFileNotice: ProjectFileNotice?
     @State private var isShowingContextualHelp = false
     @State private var isShowingProductInformation = false
@@ -44,6 +87,7 @@ struct TopologyEditorView: View {
     @State private var isShowingProtocolApplicationBuilder = false
     @State private var isShowingGuidedTour = false
     @StateObject private var undoCoordinator = TopologyEditorUndoCoordinator()
+    @StateObject private var lanRemoteLinkController = TopologyRemoteLinkLANController()
 
     private let canvasWorldBounds = CGRect(x: -10_000, y: -10_000, width: 20_000, height: 20_000)
 
@@ -65,8 +109,59 @@ struct TopologyEditorView: View {
     }
 
     private var editorContent: some View {
+        editorPresentation
+    }
+
+    private var editorPresentation: some View {
+        editorBase
+        .modifier(
+            TopologyEditorPersistencePresentationModifier(
+                isImportingProject: $isImportingFiliusProject,
+                exportSession: $filiusExportSession,
+                onImport: handleFiliusProjectImport,
+                onExport: handleFiliusProjectExport,
+                onCleanupExport: cleanupFiliusProjectExport
+            )
+        )
+        .modifier(
+            TopologyEditorTextExportPresentationModifier(
+                isExportingDocumentationImage: $isExportingDocumentationImage,
+                documentationImageDocument: documentationImageDocument,
+                onDocumentationImageExport: handleDocumentationImageExport,
+                isExportingDocumentationPDF: $isExportingDocumentationPDF,
+                documentationPDFDocument: documentationPDFDocument,
+                onDocumentationPDFExport: handleDocumentationPDFExport,
+                isExportingDetailedReport: $isExportingDetailedReport,
+                detailedReportDocument: detailedReportDocument,
+                onDetailedReportExport: handleDetailedReportExport,
+                isExportingPacketCapture: $isExportingPacketCapture,
+                packetCaptureDocument: packetCaptureDocument,
+                onPacketCaptureExport: handlePacketCaptureExport,
+                notice: $projectFileNotice
+            )
+        )
+        .onAppear(perform: handleViewAppear)
+        .onChange(of: state.simulationPhase) { _, newPhase in
+            handleSimulationPhaseChange(newPhase)
+        }
+        .onChange(of: stateReplacementGeneration, handleStateReplacement)
+        .onChange(of: scenePhase) { _, _ in reconcileLANRemoteLinks() }
+        .onChange(of: appPreferences.experimentalProtocolApplicationsEnabled) { _, enabled in
+            if !enabled {
+                isShowingProtocolApplicationBuilder = false
+            }
+        }
+        .onChange(of: appPreferences.simulationSpeed) { _, newSpeed in
+            send(.setSimulationSpeed(percent: newSpeed.percent))
+        }
+        .onDisappear(perform: handleViewDisappear)
+    }
+
+
+    private var editorBase: some View {
         VStack(spacing: 0) {
             mainMenu
+                .zIndex(2)
 
             if isPersistenceBusy {
                 Text(FiliusLocalization.t("persistence.restore.inProgress"))
@@ -232,67 +327,6 @@ struct TopologyEditorView: View {
             Text(persistenceAlertMessage(for: failure))
                 .accessibilityIdentifier("persistence.error.alert")
         }
-        .fileImporter(
-            isPresented: $isImportingFiliusProject,
-            allowedContentTypes: FiliusProjectImportResourcePolicy.allowedContentTypes,
-            allowsMultipleSelection: false,
-            onCompletion: handleFiliusProjectImport
-        )
-        .sheet(item: $filiusExportSession) { session in
-            FiliusProjectExportPicker(
-                fileURL: session.fileURL,
-                onCompletion: { result in
-                    handleFiliusProjectExport(result, session: session)
-                }
-            )
-            .onDisappear {
-                cleanupFiliusProjectExport(at: session.fileURL)
-                if filiusExportSession?.id == session.id {
-                    filiusExportSession = nil
-                }
-            }
-        }
-        .onOpenURL { url in
-            guard url.isFileURL else {
-                return
-            }
-            handleFiliusProjectImport(.success([url]))
-        }
-        .fileExporter(
-            isPresented: $isExportingDocumentationImage,
-            document: documentationImageDocument,
-            contentType: .png,
-            defaultFilename: FiliusLocalization.t("project.filename.documentationPNG"),
-            onCompletion: handleDocumentationImageExport
-        )
-        .fileExporter(
-            isPresented: $isExportingDocumentationPDF,
-            document: documentationPDFDocument,
-            contentType: .pdf,
-            defaultFilename: FiliusLocalization.t("project.filename.documentationPDF"),
-            onCompletion: handleDocumentationPDFExport
-        )
-        .alert(item: $projectFileNotice) { notice in
-            Alert(
-                title: Text(notice.title),
-                message: Text(notice.message),
-                dismissButton: .default(Text(FiliusLocalization.t("ui.9ce3bd4224c8")))
-            )
-        }
-        .onAppear(perform: handleViewAppear)
-        .onChange(of: state.simulationPhase) { _, newPhase in
-            handleSimulationPhaseChange(newPhase)
-        }
-        .onChange(of: stateReplacementGeneration, handleStateReplacement)
-        .onChange(of: appPreferences.experimentalProtocolApplicationsEnabled) { _, enabled in
-            if !enabled {
-                isShowingProtocolApplicationBuilder = false
-            }
-        }
-        .onChange(of: appPreferences.simulationSpeed) { _, newSpeed in
-            send(.setSimulationSpeed(percent: newSpeed.percent))
-        }
-        .onDisappear(perform: handleViewDisappear)
     }
 
     private func completeGuidedTour() {
@@ -305,6 +339,7 @@ struct TopologyEditorView: View {
         if state.simulationPhase == .running {
             send(.stopSimulation)
         }
+        lanRemoteLinkController.stopAll()
     }
 
     private var isUITesting: Bool {
@@ -359,6 +394,7 @@ struct TopologyEditorView: View {
                 onExportImage: prepareDocumentationImageExport,
                 onExportPDF: prepareDocumentationPDFExport
             )
+            .zIndex(1)
             canvasWorkspace
         }
     }
@@ -373,6 +409,7 @@ struct TopologyEditorView: View {
                 onPaletteDragPrepared: handlePaletteDragPrepared,
                 presentation: .compactShelf
             )
+            .zIndex(1)
         }
     }
 
@@ -385,6 +422,7 @@ struct TopologyEditorView: View {
                     onSelectTool: setToolMode,
                     onPaletteDragPrepared: handlePaletteDragPrepared
                 )
+                .zIndex(1)
                 .transition(.move(edge: .leading).combined(with: .opacity))
             }
 
@@ -485,7 +523,11 @@ struct TopologyEditorView: View {
                 onInspectRuntimeNode: { send(.openRuntimeDevice(nodeID: $0)) },
                 onDeleteLink: { send(.deleteLink(linkID: $0)) }
             )
+            // Nodes are positioned in the panned canvas coordinate space. Clip
+            // that rendering to the canvas viewport so it cannot paint over the
+            // persistent toolbar, palette, or configuration strip.
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
             .dropDestination(for: String.self) { items, location in
                 handlePaletteDrop(items: items, location: location)
             }
@@ -946,6 +988,7 @@ struct TopologyEditorView: View {
             .saveDesignDeviceConfiguration(
                 nodeID: nodeID,
                 displayName: draft.displayName,
+                hostLabelPolicy: node.kind.isPCClassEndpoint ? draft.hostLabelPolicy : nil,
                 deviceConfiguration: draft.deviceConfiguration(for: node),
                 interfaceConfigurations: draft.interfaceConfigurations,
                 switchConfiguration: draft.switchConfiguration(for: node),
@@ -1080,7 +1123,7 @@ struct TopologyEditorView: View {
             natMappings: state.networkRuntime.natMappings(gatewayNodeID: nodeID),
             portForwardingRows: state.runtimePortForwardingRowsByNodeID[nodeID] ?? [],
             packetCaptureTabs: state.networkRuntime.packetCaptureTabs(nodeID: nodeID),
-            packetMessageRows: state.networkRuntime.packetMessageRows(nodeID: nodeID),
+            packetMessageRows: state.networkRuntime.packetCaptureMessageRows(nodeID: nodeID),
             packetLayerPath: { identity, localOnly in
                 state.networkRuntime.packetLayerPath(
                     identity: identity,
@@ -1102,13 +1145,18 @@ struct TopologyEditorView: View {
             consoleEntries: state.runtimeConsoleEntriesByNodeID[nodeID] ?? [],
             terminalWorkingDirectory: state.runtimeWorkingDirectoryByNodeID[nodeID] ?? "/",
             dhcpLease: state.runtimeDHCPLeaseByNodeID[nodeID],
-            dnsRecords: (state.runtimeDNSServerConfigurationsByNodeID[nodeID]?.recordsByHostname.values.map { $0 } ?? []).sorted { lhs, rhs in
-                lhs.hostname < rhs.hostname
-            },
+            dnsRecords: state.runtimeDNSServerConfigurationsByNodeID[nodeID]?.typedRecords ?? [],
+            dnsRecursiveResolutionEnabled: state.runtimeDNSServerConfigurationsByNodeID[nodeID]?.recursiveResolutionEnabled ?? false,
+            dnsForwardingServerIPAddress: state.runtimeDNSServerConfigurationsByNodeID[nodeID]?.forwardingServerIPAddress,
             dnsServerState: state.runtimeDNSServerSocketIDByNodeID[nodeID] != nil ? TopologyRuntimeServiceProcessState(port: 53) : nil,
             webServerState: state.runtimeWebServerByNodeID[nodeID],
             webServerConfiguration: state.runtimeWebServerConfigurationsByNodeID[nodeID] ?? TopologyRuntimeWebServerConfiguration(),
             webServerRequestLogs: state.runtimeWebServerRequestLogsByNodeID[nodeID] ?? [],
+            webAdministrationConfiguration: state.runtimeWebAdministrationConfigurationsByNodeID[nodeID]
+                ?? TopologyRuntimeWebAdministrationConfiguration(),
+            webAdministrationRunning: node?.kind == .router || node?.kind == .gateway
+                ? state.runtimeWebAdministrationByNodeID[nodeID] != nil
+                : false,
             webBrowserConfiguration: state.runtimeWebBrowserConfigurationsByNodeID[nodeID] ?? TopologyRuntimeWebBrowserConfiguration(),
             webBrowserState: state.runtimeWebBrowserStateByNodeID[nodeID],
             echoServerState: state.runtimeEchoServerByNodeID[nodeID],
@@ -1161,6 +1209,9 @@ struct TopologyEditorView: View {
             onResetPacketCapture: {
                 send(.resetRuntimePacketCapture(nodeID: nil, interfaceID: nil))
             },
+            onExportPacketCapture: { interfaceID in
+                preparePacketCaptureExport(nodeID: nodeID, interfaceID: interfaceID)
+            },
             onInstallProgram: { program in
                 send(.installRuntimeProgram(nodeID: nodeID, program: program))
             },
@@ -1205,20 +1256,50 @@ struct TopologyEditorView: View {
             onDHCPRelease: {
                 send(.runtimeDHCPRelease(nodeID: nodeID))
             },
-            onDNSAddRecord: { hostname, targetIPAddress in
-                send(.runtimeDNSAddRecord(nodeID: nodeID, hostname: hostname, targetIPAddress: targetIPAddress))
+            onDNSAddTypedRecord: { hostname, recordType, target, ttlSeconds in
+                send(.runtimeDNSAddTypedRecord(
+                    nodeID: nodeID,
+                    hostname: hostname,
+                    recordType: recordType,
+                    target: target,
+                    ttlSeconds: ttlSeconds
+                ))
             },
-            onDNSRemoveRecord: { hostname in
-                send(.runtimeDNSRemoveRecord(nodeID: nodeID, hostname: hostname))
+            onDNSRemoveTypedRecord: { record in
+                send(.runtimeDNSRemoveTypedRecord(
+                    nodeID: nodeID,
+                    hostname: record.name.rawValue,
+                    recordType: record.type,
+                    target: record.target
+                ))
             },
-            onDNSResolveRecord: { hostname in
-                send(.runtimeDNSResolveRecord(nodeID: nodeID, hostname: hostname))
+            onDNSResolveTypedRecord: { hostname, recordType in
+                send(.runtimeDNSResolveTypedRecord(nodeID: nodeID, hostname: hostname, recordType: recordType))
+            },
+            onDNSSetRecursion: { enabled, forwarder in
+                send(.runtimeDNSSetRecursion(
+                    nodeID: nodeID,
+                    enabled: enabled,
+                    forwardingServerIPAddress: forwarder
+                ))
             },
             onDNSStart: {
                 send(.runtimeDNSStart(nodeID: nodeID))
             },
             onDNSStop: {
                 send(.runtimeDNSStop(nodeID: nodeID))
+            },
+            onSaveWebServerConfiguration: { configuration in
+                send(.saveRuntimeWebServerConfiguration(nodeID: nodeID, configuration: configuration))
+            },
+            onSaveWebAdministrationConfiguration: { configuration in
+                send(.saveRuntimeWebAdministrationConfiguration(nodeID: nodeID, configuration: configuration))
+            },
+            onWebAdministrationStart: { port in
+                send(.runtimeWebAdministrationStart(nodeID: nodeID, port: port))
+            },
+            onWebAdministrationStop: {
+                send(.runtimeWebAdministrationStop(nodeID: nodeID))
             },
             onWebStart: { port in
                 send(.runtimeWebStart(nodeID: nodeID, port: port))
@@ -1264,6 +1345,13 @@ struct TopologyEditorView: View {
             },
             onRetrieveEmail: {
                 send(.runtimeEmailClientRetrieve(nodeID: nodeID))
+            },
+            onDeleteEmailMessages: { folder, messageIDs in
+                send(.runtimeEmailClientDeleteMessages(
+                    nodeID: nodeID,
+                    folder: folder,
+                    messageIDs: messageIDs
+                ))
             },
             onSaveEmailServerConfiguration: { configuration in
                 send(.saveRuntimeEmailServerConfiguration(nodeID: nodeID, configuration: configuration))
@@ -1529,6 +1617,68 @@ struct TopologyEditorView: View {
                 title: FiliusLocalization.t("report.saveFailed"),
                 message: error.localizedDescription
             )
+        }
+    }
+
+    private func prepareDetailedReportExport() {
+        detailedReportDocument = TopologyTextFileDocument(
+            text: TopologyDetailedReportTextRenderer.render(
+                state: state,
+                context: TopologyDetailedReportContext(
+                    packetLossPolicyDescription: state.networkRuntime.state.globalPacketLossEnabled
+                        ? "drop all frames"
+                        : "disabled"
+                )
+            )
+        )
+        isExportingDetailedReport = true
+    }
+
+    private func handleDetailedReportExport(_ result: Result<URL, Error>) {
+        defer { detailedReportDocument = nil }
+        handleTextExport(
+            result,
+            successTitle: FiliusLocalization.t("report.detailed.saved.title"),
+            failureTitle: FiliusLocalization.t("report.detailed.failed.title")
+        )
+    }
+
+    private func preparePacketCaptureExport(nodeID: UUID, interfaceID: UUID?) {
+        packetCaptureDocument = TopologyTextFileDocument(
+            text: TopologyPacketCaptureTextExportFormatter.renderTSV(
+                state: state,
+                scope: TopologyPacketCaptureExportScope(
+                    nodeID: nodeID,
+                    interfaceID: interfaceID
+                )
+            )
+        )
+        isExportingPacketCapture = true
+    }
+
+    private func handlePacketCaptureExport(_ result: Result<URL, Error>) {
+        defer { packetCaptureDocument = nil }
+        handleTextExport(
+            result,
+            successTitle: FiliusLocalization.t("packet.export.saved.title"),
+            failureTitle: FiliusLocalization.t("packet.export.failed.title")
+        )
+    }
+
+    private func handleTextExport(
+        _ result: Result<URL, Error>,
+        successTitle: String,
+        failureTitle: String
+    ) {
+        switch result {
+        case .success(let url):
+            projectFileNotice = ProjectFileNotice(
+                title: successTitle,
+                message: FiliusLocalization.t("text.export.saved.message", url.lastPathComponent)
+            )
+        case .failure(let error):
+            guard !isUserCancellation(error) else { return }
+            projectFileNotice = ProjectFileNotice(title: failureTitle, message: error.localizedDescription)
         }
     }
 
@@ -1903,7 +2053,9 @@ struct TopologyEditorView: View {
             currentState: { state },
             replaceState: { state = $0 }
         )
+        configureLANRemoteLinkController()
         handleSimulationPhaseChange(state.simulationPhase)
+        reconcileLANRemoteLinks()
         if !isUITesting && !appPreferences.hasCompletedGuidedTour {
             isShowingGuidedTour = true
         }
@@ -1913,6 +2065,8 @@ struct TopologyEditorView: View {
         undoCoordinator.removeAllActions()
         filiusSupplementalArchiveEntries = [:]
         filiusOpaqueContent = .empty
+        lanRemoteLinkController.stopAll()
+        reconcileLANRemoteLinks()
     }
 
     private var mainMenu: some View {
@@ -1920,11 +2074,18 @@ struct TopologyEditorView: View {
             simulationPhase: state.simulationPhase,
             workspaceMode: state.workspaceMode,
             simulationSpeed: appPreferences.simulationSpeed,
+            globalPacketLossEnabled: state.networkRuntime.state.globalPacketLossEnabled,
             isPersistenceBusy: isPersistenceBusy,
             canUndo: undoCoordinator.canUndo,
             canRedo: undoCoordinator.canRedo,
             showsProtocolApplicationBuilder: appPreferences.experimentalProtocolApplicationsEnabled,
             onSimulationSpeedChanged: { appPreferences.setSimulationSpeed(percent: $0) },
+            onGlobalPacketLossChanged: { enabled in
+                guard enabled != state.networkRuntime.state.globalPacketLossEnabled else {
+                    return
+                }
+                send(.setGlobalPacketLoss(enabled: enabled))
+            },
             onNewProject: handleNewProject,
             onOpenProject: { isImportingFiliusProject = true },
             onSaveProject: prepareFiliusProjectExport,
@@ -1938,6 +2099,7 @@ struct TopologyEditorView: View {
                 guard appPreferences.experimentalProtocolApplicationsEnabled else { return }
                 isShowingProtocolApplicationBuilder = true
             },
+            onExportDetailedReport: prepareDetailedReportExport,
             onShowHelp: { isShowingContextualHelp = true },
             onShowInformation: { isShowingProductInformation = true },
             onShowSettings: { isShowingProductSettings = true }
@@ -2026,11 +2188,59 @@ struct TopologyEditorView: View {
         connectionPortPickerNodeID = nodeID
     }
 
+    private func configureLANRemoteLinkController() {
+        lanRemoteLinkController.onConnectionStateChange = { nodeID, connectionState in
+            send(.setLANRemoteLinkConnectionState(nodeID: nodeID, connectionState: connectionState))
+        }
+        lanRemoteLinkController.onFrameReceived = { nodeID, frame in
+            guard state.simulationPhase == .running else { return false }
+            var snapshot = state
+            guard snapshot.networkRuntime.receiveLANRemoteLinkFrame(frame, nodeID: nodeID) else {
+                return false
+            }
+            state = snapshot
+            flushLANRemoteLinkOutboundFrames()
+            reconcileLANRemoteLinks()
+            return true
+        }
+    }
+
+    private func reconcileLANRemoteLinks() {
+        guard TopologyRemoteLinkLANReleaseGate.current.isEnabled else {
+            lanRemoteLinkController.stopAll()
+            return
+        }
+        guard scenePhase == .active, state.simulationPhase == .running else {
+            lanRemoteLinkController.stopAll()
+            return
+        }
+        let endpoints = TopologyRemoteLinkLANReleaseGate.current.endpointConfigurations(
+            nodes: state.graph.nodes,
+            configurationsByNodeID: state.remoteLinkConfigurationsByNodeID
+        )
+        lanRemoteLinkController.reconcile(endpoints: endpoints)
+    }
+
+    private func flushLANRemoteLinkOutboundFrames() {
+        guard TopologyRemoteLinkLANReleaseGate.current.isEnabled else { return }
+        for outbound in state.networkRuntime.claimLANRemoteLinkOutboundFrames() {
+            lanRemoteLinkController.send(outbound.frame, from: outbound.nodeID) { result in
+                send(.completeLANRemoteLinkOutboundFrame(
+                    nodeID: outbound.nodeID,
+                    transmissionID: outbound.transmissionID,
+                    result: result
+                ))
+            }
+        }
+    }
+
     private func send(_ action: TopologyEditorAction) {
         let before = state
         var snapshot = before
         TopologyEditorReducer.reduce(state: &snapshot, action: action)
         state = snapshot
+        flushLANRemoteLinkOutboundFrames()
+        reconcileLANRemoteLinks()
 
         guard let actionNameKey = action.undoActionNameKey,
               before.simulationPhase == .stopped,
@@ -2130,6 +2340,7 @@ private struct TopologyDesignPortDetail: Identifiable, Equatable {
 struct TopologyDesignDeviceConfigurationDraft: Equatable {
     let nodeID: UUID
     var displayName: String
+    var hostLabelPolicy: TopologyHostLabelPolicy
     var ipAddress: String
     var subnetMask: String
     var defaultGateway: String
@@ -2140,6 +2351,12 @@ struct TopologyDesignDeviceConfigurationDraft: Equatable {
     var remoteLinkPairIdentifier: String
     var remoteLinkLatencyMilliseconds: String
     var remoteLinkEnabled: Bool
+    var remoteLinkTransportMode: TopologyRemoteLinkTransportMode
+    var remoteLinkLANRole: TopologyRemoteLinkLANRole
+    var remoteLinkLANPort: String
+    var remoteLinkLANJoinMethod: TopologyRemoteLinkLANJoinMethod
+    var remoteLinkLANRemoteHost: String
+    var remoteLinkLANRemotePort: String
     var wirelessEnabled: Bool
     var wirelessSSID: String
 
@@ -2154,6 +2371,7 @@ struct TopologyDesignDeviceConfigurationDraft: Equatable {
     ) {
         nodeID = node.id
         displayName = node.displayName
+        hostLabelPolicy = node.hostLabelPolicy
         ipAddress = deviceConfiguration?.ipAddress ?? ""
         subnetMask = deviceConfiguration?.subnetMask ?? ""
         defaultGateway = deviceConfiguration?.defaultGateway ?? ""
@@ -2169,13 +2387,23 @@ struct TopologyDesignDeviceConfigurationDraft: Equatable {
         remoteLinkPairIdentifier = effectiveRemoteLinkConfiguration.pairIdentifier
         remoteLinkLatencyMilliseconds = String(effectiveRemoteLinkConfiguration.latencyMilliseconds)
         remoteLinkEnabled = effectiveRemoteLinkConfiguration.isEnabled
+        remoteLinkTransportMode = effectiveRemoteLinkConfiguration.transportMode
+        remoteLinkLANRole = effectiveRemoteLinkConfiguration.lanRole
+        remoteLinkLANPort = String(effectiveRemoteLinkConfiguration.lanPort)
+        remoteLinkLANJoinMethod = effectiveRemoteLinkConfiguration.lanJoinMethod
+        remoteLinkLANRemoteHost = effectiveRemoteLinkConfiguration.lanRemoteHost
+        remoteLinkLANRemotePort = String(effectiveRemoteLinkConfiguration.lanRemotePort)
         wirelessEnabled = hostWirelessConfiguration.isEnabled
         wirelessSSID = hostWirelessConfiguration.ssid.isEmpty
             ? availableSSIDs.first ?? ""
             : hostWirelessConfiguration.ssid
     }
 
-    func isValid(for node: TopologyNode, availableSSIDs: [String]) -> Bool {
+    func isValid(
+        for node: TopologyNode,
+        availableSSIDs: [String],
+        lanReleasePolicy: TopologyRemoteLinkLANReleaseGate.Policy = TopologyRemoteLinkLANReleaseGate.current
+    ) -> Bool {
         guard !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return false
         }
@@ -2195,8 +2423,18 @@ struct TopologyDesignDeviceConfigurationDraft: Equatable {
         case .networkSwitch:
             return Self.isValidSSID(switchSSID) && retentionMilliseconds != nil
         case .remoteLink:
-            return !remoteLinkPairIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                && remoteLinkLatencyMillisecondsValue != nil
+            guard !remoteLinkPairIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  remoteLinkLatencyMillisecondsValue != nil else { return false }
+            guard remoteLinkTransportMode == .localNetwork else { return true }
+            guard lanReleasePolicy.isEnabled else { return true }
+            if remoteLinkLANRole == .host {
+                return remoteLinkLANPortValue != nil
+            }
+            if remoteLinkLANJoinMethod == .bonjour {
+                return true
+            }
+            return !remoteLinkLANRemoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && remoteLinkLANRemotePortValue != nil
         case .unsupported:
             return false
         }
@@ -2239,7 +2477,13 @@ struct TopologyDesignDeviceConfigurationDraft: Equatable {
         return TopologyRemoteLinkConfiguration(
             pairIdentifier: remoteLinkPairIdentifier.trimmingCharacters(in: .whitespacesAndNewlines),
             latencyMilliseconds: latencyMilliseconds,
-            isEnabled: remoteLinkEnabled
+            isEnabled: remoteLinkEnabled,
+            transportMode: remoteLinkTransportMode,
+            lanRole: remoteLinkLANRole,
+            lanPort: remoteLinkLANPortValue ?? TopologyRemoteLinkConfiguration.defaultLANPort,
+            lanJoinMethod: remoteLinkLANJoinMethod,
+            lanRemoteHost: remoteLinkLANRemoteHost.trimmingCharacters(in: .whitespacesAndNewlines),
+            lanRemotePort: remoteLinkLANRemotePortValue ?? TopologyRemoteLinkConfiguration.defaultLANPort
         )
     }
 
@@ -2259,6 +2503,16 @@ struct TopologyDesignDeviceConfigurationDraft: Equatable {
 
     var remoteLinkLatencyMillisecondsValue: UInt64? {
         UInt64(remoteLinkLatencyMilliseconds.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    var remoteLinkLANPortValue: UInt16? {
+        guard let port = UInt16(remoteLinkLANPort.trimmingCharacters(in: .whitespacesAndNewlines)), port > 0 else { return nil }
+        return port
+    }
+
+    var remoteLinkLANRemotePortValue: UInt16? {
+        guard let port = UInt16(remoteLinkLANRemotePort.trimmingCharacters(in: .whitespacesAndNewlines)), port > 0 else { return nil }
+        return port
     }
 
     private func interfacesAreValid(for node: TopologyNode) -> Bool {
@@ -2369,6 +2623,18 @@ private struct TopologyDesignDeviceConfigurationEditor: View {
             ipv4Field(FiliusLocalization.t("editor.field.gatewayOptional"), text: $draft.defaultGateway, identifier: "design.configuration.gateway")
             ipv4Field(FiliusLocalization.t("editor.field.dnsOptional"), text: $draft.dnsServer, identifier: "design.configuration.dns")
         }
+        Section(FiliusLocalization.t("hostLabel.section")) {
+            Picker(FiliusLocalization.t("hostLabel.mode"), selection: $draft.hostLabelPolicy) {
+                ForEach(TopologyHostLabelPolicy.allCases, id: \.self) { policy in
+                    Text(FiliusLocalization.t("hostLabel.\(policy.rawValue)"))
+                        .tag(policy)
+                }
+            }
+            .accessibilityIdentifier("design.configuration.hostLabelPolicy")
+            Text(FiliusLocalization.t("hostLabel.help"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
         Section(FiliusLocalization.t("ui.e50d347f8eb0")) {
             Toggle(FiliusLocalization.t("ui.83d74216aac0"), isOn: $draft.wirelessEnabled)
                 .accessibilityIdentifier("design.configuration.wireless.enabled")
@@ -2445,18 +2711,120 @@ private struct TopologyDesignDeviceConfigurationEditor: View {
     private var remoteLinkSections: some View {
         Section(FiliusLocalization.t("ui.30b8b5ee6804")) {
             Toggle(FiliusLocalization.t("ui.4f68e5cafabb"), isOn: $draft.remoteLinkEnabled)
+                .disabled(isReleaseGatedLocalNetworkConfiguration)
                 .accessibilityIdentifier("design.configuration.remote-link.enabled")
-            TextField(FiliusLocalization.t("editor.field.pairID"), text: $draft.remoteLinkPairIdentifier)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .accessibilityIdentifier("design.configuration.remote-link.pair-id")
-            TextField(FiliusLocalization.t("editor.field.deterministicLatency"), text: $draft.remoteLinkLatencyMilliseconds)
-                .keyboardType(.numberPad)
-                .accessibilityIdentifier("design.configuration.remote-link.latency-ms")
-            Text(FiliusLocalization.t("ui.4e9c2f9ead7f"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("design.configuration.remote-link.compatibility")
+            if TopologyRemoteLinkLANReleaseGate.current.isEnabled {
+                Picker(FiliusLocalization.t("remoteLink.transport.title"), selection: $draft.remoteLinkTransportMode) {
+                    ForEach(TopologyRemoteLinkLANReleaseGate.current.selectableTransportModes, id: \.self) { mode in
+                        Text(
+                            FiliusLocalization.t(
+                                mode == .localNetwork
+                                    ? "remoteLink.transport.localNetwork"
+                                    : "remoteLink.transport.inProject"
+                            )
+                        )
+                        .tag(mode)
+                    }
+                }
+                .accessibilityIdentifier("design.configuration.remote-link.transport")
+            } else {
+                LabeledContent(
+                    FiliusLocalization.t("remoteLink.transport.title"),
+                    value: FiliusLocalization.t(
+                        draft.remoteLinkTransportMode == .localNetwork
+                            ? "remoteLink.transport.localNetwork"
+                            : "remoteLink.transport.inProject"
+                    )
+                )
+                if draft.remoteLinkTransportMode == .localNetwork {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            FiliusLocalization.t("remoteLink.localNetwork.releaseGate.title"),
+                            systemImage: "lock.fill"
+                        )
+                        .foregroundStyle(.secondary)
+                        Text(FiliusLocalization.t("remoteLink.localNetwork.releaseGate.detail"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("design.configuration.remote-link.local-network-release-gate.notice")
+                    Button(FiliusLocalization.t("remoteLink.localNetwork.releaseGate.useInProject")) {
+                        draft.remoteLinkTransportMode = .inProject
+                    }
+                    .accessibilityIdentifier("design.configuration.remote-link.local-network-release-gate.use-in-project")
+                }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                LabeledContent(FiliusLocalization.t("remoteLink.linkCode")) {
+                    TextField("", text: $draft.remoteLinkPairIdentifier)
+                        .multilineTextAlignment(.trailing)
+                        .keyboardType(.numberPad)
+                        .monospacedDigit()
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityLabel(FiliusLocalization.t("remoteLink.linkCode"))
+                        .accessibilityHint(FiliusLocalization.t("remoteLink.linkCode.help"))
+                        .accessibilityIdentifier("design.configuration.remote-link.pair-id")
+                }
+                Text(FiliusLocalization.t("remoteLink.linkCode.help"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .disabled(isReleaseGatedLocalNetworkConfiguration)
+            VStack(alignment: .leading, spacing: 4) {
+                LabeledContent(FiliusLocalization.t("editor.field.deterministicLatency")) {
+                    TextField("", text: $draft.remoteLinkLatencyMilliseconds)
+                        .multilineTextAlignment(.trailing)
+                        .keyboardType(.numberPad)
+                        .accessibilityLabel(FiliusLocalization.t("editor.field.deterministicLatency"))
+                        .accessibilityHint(FiliusLocalization.t("remoteLink.latency.help"))
+                        .accessibilityIdentifier("design.configuration.remote-link.latency-ms")
+                }
+                Text(FiliusLocalization.t("remoteLink.latency.help"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .disabled(isReleaseGatedLocalNetworkConfiguration)
+            if draft.remoteLinkTransportMode == .localNetwork {
+                if TopologyRemoteLinkLANReleaseGate.current.isEnabled {
+                    Picker(FiliusLocalization.t("remoteLink.role.title"), selection: $draft.remoteLinkLANRole) {
+                        Text(FiliusLocalization.t("remoteLink.role.host")).tag(TopologyRemoteLinkLANRole.host)
+                        Text(FiliusLocalization.t("remoteLink.role.join")).tag(TopologyRemoteLinkLANRole.join)
+                    }
+                    .accessibilityIdentifier("design.configuration.remote-link.lan-role")
+                    if draft.remoteLinkLANRole == .host {
+                        TextField(FiliusLocalization.t("remoteLink.listenPort"), text: $draft.remoteLinkLANPort)
+                            .keyboardType(.numberPad)
+                            .accessibilityIdentifier("design.configuration.remote-link.lan-port")
+                    } else {
+                        Picker(FiliusLocalization.t("remoteLink.discovery.title"), selection: $draft.remoteLinkLANJoinMethod) {
+                            Text(FiliusLocalization.t("remoteLink.discovery.bonjour")).tag(TopologyRemoteLinkLANJoinMethod.bonjour)
+                            Text(FiliusLocalization.t("remoteLink.discovery.manual")).tag(TopologyRemoteLinkLANJoinMethod.manual)
+                        }
+                        .accessibilityIdentifier("design.configuration.remote-link.discovery")
+                        if draft.remoteLinkLANJoinMethod == .manual {
+                            TextField(FiliusLocalization.t("remoteLink.remoteHost"), text: $draft.remoteLinkLANRemoteHost)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .accessibilityIdentifier("design.configuration.remote-link.remote-host")
+                            TextField(FiliusLocalization.t("remoteLink.remotePort"), text: $draft.remoteLinkLANRemotePort)
+                                .keyboardType(.numberPad)
+                                .accessibilityIdentifier("design.configuration.remote-link.remote-port")
+                        }
+                    }
+                    Text(FiliusLocalization.t("remoteLink.localNetwork.help"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text(FiliusLocalization.t("ui.4e9c2f9ead7f"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("design.configuration.remote-link.compatibility")
+            }
         }
         Section(FiliusLocalization.t("ui.0351a971d122")) {
             if let detail = portDetails.first {
@@ -2533,6 +2901,11 @@ private struct TopologyDesignDeviceConfigurationEditor: View {
 
     private var isValid: Bool {
         draft.isValid(for: node, availableSSIDs: availableSSIDs)
+    }
+
+    private var isReleaseGatedLocalNetworkConfiguration: Bool {
+        draft.remoteLinkTransportMode == .localNetwork
+            && !TopologyRemoteLinkLANReleaseGate.current.isEnabled
     }
 
     private var nodeKindLabel: String {
@@ -2681,4 +3054,92 @@ extension UTType {
         exportedAs: "com.filius.pad.fls",
         conformingTo: .zip
     )
+}
+private struct TopologyEditorPersistencePresentationModifier: ViewModifier {
+    @Binding var isImportingProject: Bool
+    @Binding var exportSession: FiliusProjectExportSession?
+    let onImport: (Result<[URL], Error>) -> Void
+    let onExport: (Result<URL, Error>, FiliusProjectExportSession) -> Void
+    let onCleanupExport: (URL) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .fileImporter(
+                isPresented: $isImportingProject,
+                allowedContentTypes: FiliusProjectImportResourcePolicy.allowedContentTypes,
+                allowsMultipleSelection: false,
+                onCompletion: onImport
+            )
+            .sheet(item: $exportSession) { session in
+                FiliusProjectExportPicker(
+                    fileURL: session.fileURL,
+                    onCompletion: { result in onExport(result, session) }
+                )
+                .onDisappear {
+                    onCleanupExport(session.fileURL)
+                    if exportSession?.id == session.id {
+                        exportSession = nil
+                    }
+                }
+            }
+            .onOpenURL { url in
+                guard url.isFileURL else { return }
+                onImport(.success([url]))
+            }
+    }
+}
+
+private struct TopologyEditorTextExportPresentationModifier: ViewModifier {
+    @Binding var isExportingDocumentationImage: Bool
+    let documentationImageDocument: TopologyPNGFileDocument?
+    let onDocumentationImageExport: (Result<URL, Error>) -> Void
+    @Binding var isExportingDocumentationPDF: Bool
+    let documentationPDFDocument: TopologyPDFFileDocument?
+    let onDocumentationPDFExport: (Result<URL, Error>) -> Void
+    @Binding var isExportingDetailedReport: Bool
+    let detailedReportDocument: TopologyTextFileDocument?
+    let onDetailedReportExport: (Result<URL, Error>) -> Void
+    @Binding var isExportingPacketCapture: Bool
+    let packetCaptureDocument: TopologyTextFileDocument?
+    let onPacketCaptureExport: (Result<URL, Error>) -> Void
+    @Binding var notice: ProjectFileNotice?
+
+    func body(content: Content) -> some View {
+        content
+            .fileExporter(
+                isPresented: $isExportingDocumentationImage,
+                document: documentationImageDocument,
+                contentType: .png,
+                defaultFilename: FiliusLocalization.t("project.filename.documentationPNG"),
+                onCompletion: onDocumentationImageExport
+            )
+            .fileExporter(
+                isPresented: $isExportingDocumentationPDF,
+                document: documentationPDFDocument,
+                contentType: .pdf,
+                defaultFilename: FiliusLocalization.t("project.filename.documentationPDF"),
+                onCompletion: onDocumentationPDFExport
+            )
+            .fileExporter(
+                isPresented: $isExportingDetailedReport,
+                document: detailedReportDocument,
+                contentType: .plainText,
+                defaultFilename: FiliusLocalization.t("project.filename.detailedReport"),
+                onCompletion: onDetailedReportExport
+            )
+            .fileExporter(
+                isPresented: $isExportingPacketCapture,
+                document: packetCaptureDocument,
+                contentType: .tabSeparatedText,
+                defaultFilename: FiliusLocalization.t("project.filename.packetCapture"),
+                onCompletion: onPacketCaptureExport
+            )
+            .alert(item: $notice) { notice in
+                Alert(
+                    title: Text(notice.title),
+                    message: Text(notice.message),
+                    dismissButton: .default(Text(FiliusLocalization.t("ui.9ce3bd4224c8")))
+                )
+            }
+    }
 }

@@ -202,3 +202,25 @@ struct TopologyPNGFileDocument: FileDocument {
         FileWrapper(regularFileWithContents: data)
     }
 }
+
+struct TopologyTextFileDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.plainText, .tabSeparatedText] }
+
+    let data: Data
+
+    init(text: String) {
+        data = Data(text.utf8)
+    }
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        data = configuration.file.regularFileContents ?? Data()
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
+    }
+}

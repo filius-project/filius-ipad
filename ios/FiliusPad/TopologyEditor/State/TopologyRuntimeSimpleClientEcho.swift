@@ -189,10 +189,16 @@ struct TopologyRuntimeWebServerConfiguration: Codable, Equatable {
 
     var port: Int = Self.defaultPort
     var documentRoot: String = Self.defaultDocumentRoot
+    var virtualHostConfiguration: TopologyRuntimeWebVirtualHostConfiguration?
 
-    init(port: Int = Self.defaultPort, documentRoot: String = Self.defaultDocumentRoot) {
+    init(
+        port: Int = Self.defaultPort,
+        documentRoot: String = Self.defaultDocumentRoot,
+        virtualHostConfiguration: TopologyRuntimeWebVirtualHostConfiguration? = nil
+    ) {
         self.port = port
         self.documentRoot = documentRoot
+        self.virtualHostConfiguration = virtualHostConfiguration
     }
 }
 
@@ -219,7 +225,96 @@ struct TopologyRuntimeWebBrowserHistoryEntry: Equatable {
     let address: String
     let statusCode: Int?
     let title: String?
+    let resolvedIPAddress: String
+    let contentType: String?
+    let body: String
+    let bodyData: Data
+    let errorMessage: String?
+
+    init(
+        address: String,
+        statusCode: Int?,
+        title: String?,
+        resolvedIPAddress: String = "",
+        contentType: String? = nil,
+        body: String = "",
+        bodyData: Data = Data(),
+        errorMessage: String? = nil
+    ) {
+        self.address = address
+        self.statusCode = statusCode
+        self.title = title
+        self.resolvedIPAddress = resolvedIPAddress
+        self.contentType = contentType
+        self.body = body
+        self.bodyData = bodyData
+        self.errorMessage = errorMessage
+    }
+
+    fileprivate var retainedByteCount: Int {
+        address.utf8.count + resolvedIPAddress.utf8.count + (contentType?.utf8.count ?? 0)
+            + body.utf8.count + bodyData.count + (errorMessage?.utf8.count ?? 0)
+    }
 }
+
+
+struct TopologyRuntimeWebBrowserRequest: Equatable, Sendable {
+    private static let encodedPrefix = "filius-simulated-http-request:"
+    static let maximumBodySize = 64 * 1_024
+    private static let pendingStore = PendingStore()
+
+    let address: String
+    let method: String
+    let body: Data
+
+    init(address: String, method: String = "GET", body: Data = Data()) {
+        self.address = address
+        self.method = method.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        self.body = body
+    }
+
+    /// Bridges a typed WebKit request through the existing string-only reducer action.
+    /// The opaque token is one-shot, bounded, and does not expose POST fields in runtime logs.
+    var encodedNavigationAddress: String? {
+        guard body.count <= Self.maximumBodySize,
+              method == "GET" || method == "POST"
+        else { return nil }
+        return Self.encodedPrefix + Self.pendingStore.insert(self)
+    }
+
+    static func decodeNavigationAddress(_ rawValue: String) -> Self? {
+        guard rawValue.hasPrefix(encodedPrefix) else { return nil }
+        return pendingStore.take(String(rawValue.dropFirst(encodedPrefix.count)))
+    }
+
+    private final class PendingStore: @unchecked Sendable {
+        private let lock = NSLock()
+        private var requestsByToken: [String: TopologyRuntimeWebBrowserRequest] = [:]
+        private var tokensInInsertionOrder: [String] = []
+        private let capacity = 128
+
+        func insert(_ request: TopologyRuntimeWebBrowserRequest) -> String {
+            lock.lock()
+            defer { lock.unlock() }
+            while tokensInInsertionOrder.count >= capacity {
+                requestsByToken.removeValue(forKey: tokensInInsertionOrder.removeFirst())
+            }
+            let token = UUID().uuidString.lowercased()
+            tokensInInsertionOrder.append(token)
+            requestsByToken[token] = request
+            return token
+        }
+
+        func take(_ token: String) -> TopologyRuntimeWebBrowserRequest? {
+            lock.lock()
+            defer { lock.unlock() }
+            guard let request = requestsByToken.removeValue(forKey: token) else { return nil }
+            tokensInInsertionOrder.removeAll { $0 == token }
+            return request
+        }
+    }
+}
+
 
 enum TopologyRuntimeWebBrowserConnectionState: String, Equatable {
     case idle
@@ -229,6 +324,9 @@ enum TopologyRuntimeWebBrowserConnectionState: String, Equatable {
 }
 
 struct TopologyRuntimeWebBrowserState: Equatable {
+    static let maximumHistoryEntries = 32
+    static let maximumHistoryBytes = 8 * 1_024 * 1_024
+
     var connectionState: TopologyRuntimeWebBrowserConnectionState = .idle
     var address = ""
     var resolvedIPAddress = ""
@@ -243,6 +341,31 @@ struct TopologyRuntimeWebBrowserState: Equatable {
 
     var shouldRenderBodyAsHTML: Bool {
         !body.isEmpty && contentType?.lowercased().hasPrefix("text/html") == true
+    }
+
+    var canNavigateBack: Bool {
+        guard let historyIndex, history.indices.contains(historyIndex) else { return false }
+        return historyIndex > history.startIndex
+    }
+
+    var canNavigateForward: Bool {
+        guard let historyIndex, history.indices.contains(historyIndex) else { return false }
+        return history.indices.contains(historyIndex + 1)
+    }
+
+    mutating func appendHistoryEntry(_ entry: TopologyRuntimeWebBrowserHistoryEntry) {
+        if let historyIndex, historyIndex + 1 < history.count {
+            history.removeLast(history.count - (historyIndex + 1))
+        }
+        history.append(entry)
+        historyIndex = history.count - 1
+
+        while history.count > Self.maximumHistoryEntries
+            || history.reduce(0, { $0 + $1.retainedByteCount }) > Self.maximumHistoryBytes
+        {
+            history.removeFirst()
+            historyIndex = history.isEmpty ? nil : history.count - 1
+        }
     }
 
     mutating func resetTransientSession() {
@@ -314,7 +437,8 @@ enum TopologyRuntimeHTTPError: Error, Equatable, LocalizedError {
 
 private enum TopologyRuntimeHTTPWire {
     static func request(method: String, host: String, path: String, body: Data = Data()) -> Data {
-        let text = "\(method) \(path) HTTP/1.1\r\nHost: \(host)\r\nConnection: close\r\nContent-Length: \(body.count)\r\n\r\n"
+        let contentType = body.isEmpty ? "" : "Content-Type: application/x-www-form-urlencoded\r\n"
+        let text = "\(method) \(path) HTTP/1.1\r\nHost: \(host)\r\n\(contentType)Connection: close\r\nContent-Length: \(body.count)\r\n\r\n"
         var data = Data(text.utf8)
         data.append(body)
         return data
@@ -449,9 +573,50 @@ extension TopologyRuntimeHTTPResponse {
         guard request.method == "GET" || request.method == "HEAD" else {
             return TopologyRuntimeHTTPResponse(statusCode: 405, contentType: "text/plain", body: Data("Method Not Allowed\n".utf8), detail: "method=\(request.method)")
         }
-        guard let safePath = safeDocumentPath(request.path, configuration: configuration) else {
+
+        let documentRoot: String
+        let dispatchDetail: String
+        if let virtualHostConfiguration = configuration.virtualHostConfiguration {
+            guard let listeningPort = UInt16(exactly: configuration.port) else {
+                return TopologyRuntimeHTTPResponse(
+                    statusCode: 500,
+                    contentType: "text/plain",
+                    body: Data("Internal Server Error\n".utf8),
+                    detail: "invalidListeningPort"
+                )
+            }
+            do {
+                let dispatch = try TopologyRuntimeWebVirtualHostDispatcher(
+                    configuration: virtualHostConfiguration
+                ).dispatch(
+                    hostHeader: request.host,
+                    listeningPort: listeningPort
+                )
+                documentRoot = dispatch.host.documentRoot
+                dispatchDetail = "virtualHost=\(dispatch.host.id),dispatch=\(dispatch.reason.rawValue)"
+            } catch {
+                return TopologyRuntimeHTTPResponse(
+                    statusCode: 400,
+                    contentType: "text/plain",
+                    body: Data("Bad Request\n".utf8),
+                    detail: "invalidHostAuthority"
+                )
+            }
+        } else {
+            documentRoot = configuration.documentRoot
+            dispatchDetail = "documentRoot=legacy"
+        }
+
+        let resolvedPath: TopologyRuntimeWebResolvedDocumentPath
+        do {
+            resolvedPath = try TopologyRuntimeWebDocumentPathResolver.resolve(
+                requestTarget: request.target,
+                documentRoot: documentRoot
+            )
+        } catch {
             return TopologyRuntimeHTTPResponse(statusCode: 400, contentType: "text/plain", body: Data("Bad Request\n".utf8), detail: "unsafePath")
         }
+        let safePath = resolvedPath.absolutePath
         let entry: TopologyVirtualFileEntry
         do {
             entry = try fileSystem.entry(at: safePath)
@@ -485,23 +650,8 @@ extension TopologyRuntimeHTTPResponse {
             statusCode: 200,
             contentType: mediaType,
             body: request.method == "HEAD" ? Data() : content,
-            detail: "path=\(safePath),bytes=\(content.count)"
+            detail: "path=\(safePath),bytes=\(content.count),\(dispatchDetail)"
         )
-    }
-
-    private static func safeDocumentPath(_ rawPath: String, configuration: TopologyRuntimeWebServerConfiguration) -> String? {
-        guard rawPath.hasPrefix("/"),
-              !rawPath.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
-        else { return nil }
-        let pathPart = rawPath.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? "/"
-        let components = pathPart.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        guard !components.contains(where: { $0 == "." || $0 == ".." || $0.contains("\\") }) else { return nil }
-        let relative = components.joined(separator: "/")
-        let root = configuration.documentRoot.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let normalizedRoot = try? TopologyVirtualFileSystem.normalizedAbsolutePath(root),
-              !normalizedRoot.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else { return nil }
-        let requested = relative.isEmpty ? "index.html" : relative
-        return normalizedRoot == "/" ? "/\(requested)" : "\(normalizedRoot)/\(requested)"
     }
 
     private static func mimeType(for path: String, fallback: String) -> String {
@@ -524,19 +674,40 @@ extension TopologyRuntimeHTTPResponse {
         guard contentType?.lowercased().hasPrefix("text/html") == true else {
             return String(data: body, encoding: .utf8) ?? "[binary \(body.count) bytes]"
         }
-        var value = String(data: body, encoding: .utf8) ?? ""
-        value = value.replacingOccurrences(of: "(?is)<script.*?</script>", with: "", options: .regularExpression)
-        value = value.replacingOccurrences(of: "(?is)<style.*?</style>", with: "", options: .regularExpression)
-        value = value.replacingOccurrences(of: "(?i)</(p|div|h[1-6]|li|br|tr)>", with: "\n", options: .regularExpression)
-        value = value.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-        return value
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return TopologyRuntimeSafeHTML.sanitize(String(data: body, encoding: .utf8) ?? "")
     }
 }
+
+enum TopologyRuntimeSafeHTML {
+    private static let dangerousElementPatterns = [
+        #"(?is)<script\b[^>]*>.*?</script\s*>"#,
+        #"(?is)<iframe\b[^>]*>.*?</iframe\s*>"#,
+        #"(?is)<object\b[^>]*>.*?</object\s*>"#,
+        #"(?is)<embed\b[^>]*?/?>"#,
+        #"(?is)<link\b[^>]*?/?>"#,
+        #"(?is)<meta\b[^>]*http-equiv\s*=\s*(["'])?refresh\1?[^>]*?/?>"#,
+        #"(?is)<base\b[^>]*?/?>"#,
+    ]
+
+    static func sanitize(_ html: String) -> String {
+        var value = html
+        for pattern in dangerousElementPatterns {
+            value = value.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        }
+        value = value.replacingOccurrences(
+            of: #"(?is)\s+on[a-z][a-z0-9_-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)"#,
+            with: "",
+            options: .regularExpression
+        )
+        value = value.replacingOccurrences(
+            of: #"(?is)(\s(?:href|src|action|formaction)\s*=\s*)(["'])\s*(?:https|file|data|javascript|vbscript):[^"']*\2"#,
+            with: "$1\"#\"",
+            options: .regularExpression
+        )
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 
 extension TopologyNetworkRuntimeEngine {
     func tcpSocketRecord(socketID: UUID) -> TopologyRuntimeSocketRecord? {
@@ -599,9 +770,85 @@ extension TopologyEditorState {
         }
     }
 
+    private mutating func runtimeWebAdministrationHTTPResponse(
+        nodeID: UUID,
+        request: TopologyRuntimeHTTPParsedRequest,
+        sourceIPAddress: String
+    ) -> TopologyRuntimeHTTPResponse? {
+        guard let node = graph.node(withID: nodeID), node.kind == .router || node.kind == .gateway else {
+            return nil
+        }
+        // Router/gateway administration owns only the /admin namespace. Normal
+        // virtual-host content must continue through the configured web roots.
+        let administrationPath = request.path == "/admin" || request.path.hasPrefix("/admin/")
+        guard administrationPath else { return nil }
+        let formFields: [String: String]
+        switch TopologyRuntimeWebAdministrationFormDecoder.decode(request.body) {
+        case let .success(decoded):
+            formFields = decoded
+        case let .failure(error):
+            return TopologyRuntimeHTTPResponse(
+                statusCode: 400,
+                contentType: "text/plain; charset=utf-8",
+                body: Data("Bad Request\n".utf8),
+                detail: error.localizedDescription
+            )
+        }
+        let administrationRequest = TopologyRuntimeWebAdministrationRequest(
+            method: request.method,
+            target: request.target,
+            sourceIPAddress: sourceIPAddress,
+            formFields: formFields
+        )
+        TopologyEditorReducer.reduce(
+            state: &self,
+            action: .runtimeWebAdministrationRequest(
+                nodeID: nodeID,
+                request: administrationRequest
+            )
+        )
+        guard let administrationResponse = runtimeWebAdministrationResponsesByNodeID[nodeID] else {
+            return nil
+        }
+        return TopologyRuntimeHTTPResponse(
+            statusCode: administrationResponse.statusCode,
+            contentType: administrationResponse.contentType,
+            body: Data(administrationResponse.body.utf8),
+            detail: administrationResponse.detail
+        )
+    }
+
     mutating func processWebServerRequests(nodeID: UUID) -> Int {
         guard let listenerID = runtimeWebServerSocketIDByNodeID[nodeID],
               let configuration = runtimeWebServerConfigurationsByNodeID[nodeID] else { return 0 }
+        return processHTTPRequests(
+            nodeID: nodeID,
+            listenerID: listenerID,
+            configuration: configuration,
+            administrationListener: false
+        )
+    }
+
+    mutating func processWebAdministrationRequests(nodeID: UUID) -> Int {
+        guard let listenerID = runtimeWebAdministrationSocketIDByNodeID[nodeID] else { return 0 }
+        let configuration = TopologyRuntimeWebServerConfiguration(
+            port: runtimeWebAdministrationConfigurationsByNodeID[nodeID]?.port
+                ?? TopologyRuntimeWebServerConfiguration.defaultPort
+        )
+        return processHTTPRequests(
+            nodeID: nodeID,
+            listenerID: listenerID,
+            configuration: configuration,
+            administrationListener: true
+        )
+    }
+
+    private mutating func processHTTPRequests(
+        nodeID: UUID,
+        listenerID: UUID,
+        configuration: TopologyRuntimeWebServerConfiguration,
+        administrationListener: Bool
+    ) -> Int {
         let accepted = networkRuntime.acceptedTCPSocketIDs(listenerSocketID: listenerID)
         var processed = 0
         for acceptedID in accepted {
@@ -627,11 +874,24 @@ extension TopologyEditorState {
                 response = TopologyRuntimeHTTPResponse(statusCode: 400, contentType: "text/plain", body: Data("Bad Request\n".utf8), detail: error.localizedDescription)
                 appendWebServerLog(nodeID: nodeID, remoteIPAddress: remoteIPAddress, method: "?", path: "?", response: response)
             case let .success(request):
-                response = TopologyRuntimeHTTPResponse.serve(
-                    request: request,
-                    fileSystem: virtualFileSystemsByNodeID[nodeID] ?? .defaultForDevice(),
-                    configuration: configuration
-                )
+                if administrationListener {
+                    response = runtimeWebAdministrationHTTPResponse(
+                        nodeID: nodeID,
+                        request: request,
+                        sourceIPAddress: remoteIPAddress
+                    ) ?? TopologyRuntimeHTTPResponse(
+                        statusCode: 404,
+                        contentType: "text/plain; charset=utf-8",
+                        body: Data("Not Found\n".utf8),
+                        detail: "administrationNamespaceOnly"
+                    )
+                } else {
+                    response = TopologyRuntimeHTTPResponse.serve(
+                        request: request,
+                        fileSystem: virtualFileSystemsByNodeID[nodeID] ?? .defaultForDevice(),
+                        configuration: configuration
+                    )
+                }
                 appendWebServerLog(nodeID: nodeID, remoteIPAddress: remoteIPAddress, method: request.method, path: request.path, response: response)
             }
             let responseData = TopologyRuntimeHTTPWire.response(response)
@@ -674,11 +934,38 @@ extension TopologyEditorState {
     mutating func navigateWebBrowser(
         nodeID: UUID,
         rawAddress: String,
+        method: String = "GET",
+        body: Data = Data(),
         historyIndex targetHistoryIndex: Int? = nil
     ) -> Result<TopologyRuntimeWebBrowserState, TopologyRuntimeHTTPError> {
         var browserState = runtimeWebBrowserStateByNodeID[nodeID] ?? TopologyRuntimeWebBrowserState()
+        if let targetHistoryIndex {
+            guard browserState.history.indices.contains(targetHistoryIndex) else {
+                let error = TopologyRuntimeHTTPError.invalidURL("history index \(targetHistoryIndex)")
+                browserState.connectionState = .failed
+                browserState.errorMessage = error.localizedDescription
+                runtimeWebBrowserStateByNodeID[nodeID] = browserState
+                return .failure(error)
+            }
+            let entry = browserState.history[targetHistoryIndex]
+            browserState.connectionState = .loaded
+            browserState.address = entry.address
+            browserState.resolvedIPAddress = entry.resolvedIPAddress
+            browserState.statusCode = entry.statusCode
+            browserState.contentType = entry.contentType
+            browserState.body = entry.body
+            browserState.bodyData = entry.bodyData
+            browserState.errorMessage = entry.errorMessage
+            browserState.historyIndex = targetHistoryIndex
+            runtimeWebBrowserStateByNodeID[nodeID] = browserState
+            return .success(browserState)
+        }
+        let embeddedRequest = TopologyRuntimeWebBrowserRequest.decodeNavigationAddress(rawAddress)
+        let requestedAddress = embeddedRequest?.address ?? rawAddress
+        let requestedMethod = embeddedRequest?.method ?? method
+        let requestedBody = embeddedRequest?.body ?? body
         browserState.connectionState = .loading
-        browserState.address = rawAddress
+        browserState.address = requestedAddress
         browserState.resolvedIPAddress = ""
         browserState.statusCode = nil
         browserState.contentType = nil
@@ -686,9 +973,31 @@ extension TopologyEditorState {
         browserState.bodyData = Data()
         browserState.errorMessage = nil
         runtimeWebBrowserStateByNodeID[nodeID] = browserState
+        let requestMethod = requestedMethod.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard requestMethod == "GET" || requestMethod == "POST" else {
+            let error = TopologyRuntimeHTTPError.malformedRequest("unsupported browser method \(requestMethod)")
+            browserState.connectionState = .failed
+            browserState.errorMessage = error.localizedDescription
+            runtimeWebBrowserStateByNodeID[nodeID] = browserState
+            return .failure(error)
+        }
+        guard requestedBody.count <= TopologyRuntimeWebBrowserRequest.maximumBodySize else {
+            let error = TopologyRuntimeHTTPError.malformedRequest("browser request body exceeds 64 KiB")
+            browserState.connectionState = .failed
+            browserState.errorMessage = error.localizedDescription
+            runtimeWebBrowserStateByNodeID[nodeID] = browserState
+            return .failure(error)
+        }
+        guard requestMethod == "POST" || requestedBody.isEmpty else {
+            let error = TopologyRuntimeHTTPError.malformedRequest("GET browser requests cannot include a body")
+            browserState.connectionState = .failed
+            browserState.errorMessage = error.localizedDescription
+            runtimeWebBrowserStateByNodeID[nodeID] = browserState
+            return .failure(error)
+        }
         let browserConfiguration = runtimeWebBrowserConfigurationsByNodeID[nodeID]
         let address: TopologyRuntimeHTTPAddress
-        switch TopologyRuntimeHTTPAddress.parse(rawAddress, fallback: browserConfiguration) {
+        switch TopologyRuntimeHTTPAddress.parse(requestedAddress, fallback: browserConfiguration) {
         case let .failure(error):
             browserState.connectionState = .failed
             browserState.errorMessage = error.localizedDescription
@@ -768,7 +1077,13 @@ extension TopologyEditorState {
             runtimeWebBrowserStateByNodeID[nodeID] = browserState
             return .failure(error)
         }
-        let requestData = TopologyRuntimeHTTPWire.request(method: "GET", host: address.host, path: address.path)
+        let hostAuthority = address.port == 80 ? address.host : "\(address.host):\(address.port)"
+        let requestData = TopologyRuntimeHTTPWire.request(
+            method: requestMethod,
+            host: hostAuthority,
+            path: address.path,
+            body: requestedBody
+        )
         networkRuntime.recordTrace(
             nodeID: nodeID,
             interfaceID: networkRuntime.networkInterfaces(nodeID: nodeID).first?.portID,
@@ -777,11 +1092,11 @@ extension TopologyEditorState {
             operation: .created,
             afterHeaders: [
                 TopologyPacketHeaderField(name: "kind", value: "HTTP"),
-                TopologyPacketHeaderField(name: "method", value: "GET"),
+                TopologyPacketHeaderField(name: "method", value: requestMethod),
                 TopologyPacketHeaderField(name: "path", value: address.path),
                 TopologyPacketHeaderField(name: "lifecycle", value: "requestCreated"),
             ],
-            detail: "HTTP GET \(address.displayAddress)"
+            detail: "HTTP \(requestMethod) \(address.displayAddress)"
         )
         guard networkRuntime.sendTCP(socketID: socketID, payload: requestData) else {
             _ = networkRuntime.closeTCPConnectionAndClean(socketID: socketID)
@@ -799,13 +1114,16 @@ extension TopologyEditorState {
             operation: .sent,
             afterHeaders: [
                 TopologyPacketHeaderField(name: "kind", value: "HTTP"),
-                TopologyPacketHeaderField(name: "method", value: "GET"),
+                TopologyPacketHeaderField(name: "method", value: requestMethod),
                 TopologyPacketHeaderField(name: "lifecycle", value: "requestSent"),
             ],
             detail: "HTTP request sent over TCP"
         )
         for serverNodeID in runtimeWebServerByNodeID.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
             _ = processWebServerRequests(nodeID: serverNodeID)
+        }
+        for serverNodeID in runtimeWebAdministrationByNodeID.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            _ = processWebAdministrationRequests(nodeID: serverNodeID)
         }
         guard let responseData = networkRuntime.receiveTCP(socketID: socketID) else {
             _ = networkRuntime.closeTCPConnectionAndClean(socketID: socketID)
@@ -857,27 +1175,18 @@ extension TopologyEditorState {
             lastPort: Int(address.port),
             lastPath: address.path
         )
-        if let targetHistoryIndex {
-            guard browserState.history.indices.contains(targetHistoryIndex) else {
-                let error = TopologyRuntimeHTTPError.invalidURL("history index \(targetHistoryIndex)")
-                browserState.connectionState = .failed
-                browserState.errorMessage = error.localizedDescription
-                runtimeWebBrowserStateByNodeID[nodeID] = browserState
-                return .failure(error)
-            }
-            browserState.historyIndex = targetHistoryIndex
-            browserState.history[targetHistoryIndex] = TopologyRuntimeWebBrowserHistoryEntry(
+        browserState.appendHistoryEntry(
+            TopologyRuntimeWebBrowserHistoryEntry(
                 address: address.displayAddress,
                 statusCode: parsedResponse.statusCode,
-                title: nil
+                title: nil,
+                resolvedIPAddress: destinationIPAddress,
+                contentType: parsedResponse.contentType,
+                body: browserState.body,
+                bodyData: parsedResponse.body,
+                errorMessage: browserState.errorMessage
             )
-        } else {
-            if browserState.historyIndex.map({ $0 + 1 < browserState.history.count }) == true {
-                browserState.history.removeLast(browserState.history.count - (browserState.historyIndex! + 1))
-            }
-            browserState.history.append(TopologyRuntimeWebBrowserHistoryEntry(address: address.displayAddress, statusCode: parsedResponse.statusCode, title: nil))
-            browserState.historyIndex = browserState.history.count - 1
-        }
+        )
         runtimeWebBrowserStateByNodeID[nodeID] = browserState
         return .success(browserState)
     }

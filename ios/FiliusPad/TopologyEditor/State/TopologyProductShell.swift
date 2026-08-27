@@ -327,8 +327,12 @@ struct TopologyProductHelpStep: Identifiable, Equatable, Codable {
 
 struct TopologyProductMetadata: Equatable {
     static let repositoryName = "FILIUS"
-    static let repositoryLicense = "GNU GPLv2 oder GNU GPLv3"
-    static let repositoryLicenseEvidenceFiles = ["Readme.md", "GPLv2.txt", "GPLv3.txt"]
+    static let repositoryLicense = "GNU GPLv2 or GNU GPLv3, plus the Apple-platform additional permission"
+    static let repositoryLicenseEvidenceFiles = [
+        "GPLv2.txt",
+        "GPLv3.txt",
+        "Apple-Platform-Additional-Permission.md",
+    ]
     static let educationalPurpose = "Netzwerksimulation für Bildungszwecke"
 
     let appName: String

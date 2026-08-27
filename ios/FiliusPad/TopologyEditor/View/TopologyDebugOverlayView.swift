@@ -24,6 +24,16 @@ struct TopologyDebugOverlayView: View {
             Text(FiliusLocalization.t("debug.tick", String(state.simulationTick)))
                 .accessibilityIdentifier("debug.simulationTick")
 
+            Text(FiliusLocalization.t(
+                "debug.packetLoss",
+                FiliusLocalization.t(
+                    state.networkRuntime.state.globalPacketLossEnabled
+                        ? "menu.packetLoss.active"
+                        : "menu.packetLoss.inactive"
+                )
+            ))
+            .accessibilityIdentifier("debug.globalPacketLoss")
+
             Text(FiliusLocalization.t("debug.openedDevice", state.openedRuntimeDeviceID?.uuidString ?? FiliusLocalization.t("ui.fallback.none")))
                 .accessibilityIdentifier("debug.openedRuntimeDevice")
 

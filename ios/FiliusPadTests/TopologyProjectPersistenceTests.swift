@@ -209,6 +209,346 @@ final class TopologyProjectPersistenceTests: XCTestCase {
         XCTAssertEqual(loaded.transitionCount, 0)
     }
 
+    func testWebVirtualHostsAndRouterAdministrationConfigurationRoundTrip() throws {
+        let pc = TopologyNode(
+            id: uuid("12121212-1212-1212-1212-121212121212"),
+            kind: .pc,
+            displayName: "Web host",
+            position: CGPoint(x: 80, y: 80)
+        )
+        let router = TopologyNode(
+            id: uuid("13131313-1313-1313-1313-131313131313"),
+            kind: .router,
+            displayName: "Admin router",
+            position: CGPoint(x: 260, y: 80)
+        )
+        var state = TopologyEditorState()
+        state.graph = TopologyGraph(nodes: [pc, router], links: [])
+        let publicHost = try TopologyRuntimeWebVirtualHost(
+            id: "public",
+            hostname: "www.example.test",
+            documentRoot: "/www/public"
+        )
+        let virtualHosts = try TopologyRuntimeWebVirtualHostConfiguration(
+            hosts: [publicHost],
+            defaultHostID: publicHost.id
+        )
+        state.runtimeWebServerConfigurationsByNodeID[pc.id] = TopologyRuntimeWebServerConfiguration(
+            port: 8080,
+            documentRoot: "/www",
+            virtualHostConfiguration: virtualHosts
+        )
+        let network = try TopologyRuntimeWebAdministrationIPv4Network(
+            networkAddress: "192.168.30.17",
+            subnetMask: "255.255.255.0"
+        )
+        let policy = TopologyRuntimeWebAdministrationAccessPolicy(
+            isEnabled: true,
+            allowedSourceNetworks: [network]
+        )
+        state.runtimeWebAdministrationConfigurationsByNodeID[router.id] = TopologyRuntimeWebAdministrationConfiguration(
+            port: 8443
+        )
+        state.runtimeWebAdministrationPoliciesByNodeID[router.id] = policy
+        let administrationConfiguration = TopologyRuntimeWebAdministrationConfiguration(
+            port: 8443,
+            accessPolicy: policy
+        )
+        XCTAssertEqual(state.runtimeWebAdministrationConfigurationsByNodeID[router.id], administrationConfiguration)
+        state.runtimeWebAdministrationByNodeID[router.id] = TopologyRuntimeServiceProcessState(port: 8443)
+        state.runtimeWebAdministrationSocketIDByNodeID[router.id] = uuid("14141414-1414-1414-1414-141414141414")
+
+        let store = TopologyProjectStore(fileURL: tempDirectoryURL.appendingPathComponent("web-parity-roundtrip.json"))
+        try store.save(state: state, savedAt: Date(timeIntervalSince1970: 1_700_000_150))
+        let loaded = try store.load()
+
+        XCTAssertEqual(loaded.runtimeWebServerConfigurationsByNodeID[pc.id], state.runtimeWebServerConfigurationsByNodeID[pc.id])
+        XCTAssertEqual(loaded.runtimeWebAdministrationConfigurationsByNodeID[router.id], administrationConfiguration)
+        XCTAssertEqual(loaded.runtimeWebAdministrationPoliciesByNodeID[router.id], policy)
+        XCTAssertTrue(loaded.runtimeWebAdministrationByNodeID.isEmpty)
+        XCTAssertTrue(loaded.runtimeWebAdministrationSocketIDByNodeID.isEmpty)
+
+        let data = try Data(contentsOf: store.fileURL)
+        let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(envelope["schemaVersion"] as? Int, 14)
+        let payload = try XCTUnwrap(envelope["payload"] as? [String: Any])
+        XCTAssertNotNil(payload["runtimeWebAdministrationConfigurations"])
+        XCTAssertNil(payload["runtimeWebAdministrationPolicies"])
+    }
+
+    func testSchemaTwelveMigratesRouterAdministrationPolicyAndLegacyWebPort() throws {
+        let router = TopologyNode(
+            id: uuid("15151515-1515-1515-1515-151515151515"),
+            kind: .router,
+            displayName: "Legacy admin router",
+            position: CGPoint(x: 120, y: 80)
+        )
+        var state = TopologyEditorState()
+        state.graph = TopologyGraph(nodes: [router], links: [])
+        state.runtimeWebServerConfigurationsByNodeID[router.id] = TopologyRuntimeWebServerConfiguration(
+            port: 8088,
+            documentRoot: "/www"
+        )
+        let network = try TopologyRuntimeWebAdministrationIPv4Network(
+            networkAddress: "10.20.30.17",
+            subnetMask: "255.255.255.0"
+        )
+        let policy = TopologyRuntimeWebAdministrationAccessPolicy(
+            isEnabled: true,
+            allowedSourceNetworks: [network]
+        )
+        state.runtimeWebAdministrationPoliciesByNodeID[router.id] = policy
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("schema-12-web-admin-migration.json")
+        let store = TopologyProjectStore(fileURL: fileURL)
+        try store.save(state: state, savedAt: Date(timeIntervalSince1970: 1_700_000_151))
+
+        let data = try Data(contentsOf: fileURL)
+        var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var payload = try XCTUnwrap(envelope["payload"] as? [String: Any])
+        payload.removeValue(forKey: "runtimeWebAdministrationConfigurations")
+        payload["runtimeWebAdministrationPolicies"] = [[
+            "nodeID": router.id.uuidString,
+            "policy": [
+                "isEnabled": true,
+                "allowedSourceNetworks": [[
+                    "networkAddress": network.networkAddress,
+                    "subnetMask": network.subnetMask
+                ]]
+            ]
+        ]]
+        payload["runtimeWebServerConfigurations"] = [[
+            "nodeID": router.id.uuidString,
+            "port": 8088,
+            "documentRoot": "/www"
+        ]]
+        envelope["schemaVersion"] = 12
+        envelope["payload"] = payload
+        try writeJSON(envelope, to: fileURL)
+
+        let loaded = try store.load()
+
+        XCTAssertEqual(
+            loaded.runtimeWebAdministrationConfigurationsByNodeID[router.id],
+            TopologyRuntimeWebAdministrationConfiguration(port: 8088, accessPolicy: policy)
+        )
+        XCTAssertNil(loaded.runtimeWebServerConfigurationsByNodeID[router.id])
+        XCTAssertTrue(loaded.runtimeWebAdministrationByNodeID.isEmpty)
+        XCTAssertTrue(loaded.runtimeWebAdministrationSocketIDByNodeID.isEmpty)
+    }
+
+    func testSchemaThirteenRejectsMissingOrInvalidWebAdministrationConfigurations() throws {
+        let router = TopologyNode(
+            id: uuid("16161616-1616-1616-1616-161616161616"),
+            kind: .gateway,
+            displayName: "Admin gateway",
+            position: CGPoint(x: 120, y: 80)
+        )
+        var state = TopologyEditorState()
+        state.graph = TopologyGraph(nodes: [router], links: [])
+        state.runtimeWebAdministrationConfigurationsByNodeID[router.id] = TopologyRuntimeWebAdministrationConfiguration(
+            port: 8080
+        )
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("schema-13-invalid-web-admin.json")
+        let store = TopologyProjectStore(fileURL: fileURL)
+        try store.save(state: state, savedAt: Date(timeIntervalSince1970: 1_700_000_152))
+
+        let data = try Data(contentsOf: fileURL)
+        let savedEnvelope = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var missingEnvelope = savedEnvelope
+        var missingPayload = try XCTUnwrap(missingEnvelope["payload"] as? [String: Any])
+        missingPayload.removeValue(forKey: "runtimeWebAdministrationConfigurations")
+        missingEnvelope["payload"] = missingPayload
+        try writeJSON(missingEnvelope, to: fileURL)
+
+        XCTAssertThrowsError(try store.load()) { error in
+            self.assertPersistenceError(
+                error,
+                expectedOperation: .load,
+                expectedCode: .malformedPayload
+            )
+            XCTAssertTrue(
+                (error as? TopologyProjectPersistenceError)?.detail.contains(
+                    "runtimeWebAdministrationConfigurationsFieldMissing"
+                ) == true
+            )
+        }
+
+        var invalidEnvelope = savedEnvelope
+        var invalidPayload = try XCTUnwrap(invalidEnvelope["payload"] as? [String: Any])
+        invalidPayload["runtimeWebAdministrationConfigurations"] = [[
+            "nodeID": router.id.uuidString,
+            "configuration": [
+                "port": 0,
+                "accessPolicy": [
+                    "isEnabled": false,
+                    "allowedSourceNetworks": []
+                ]
+            ]
+        ]]
+        invalidEnvelope["payload"] = invalidPayload
+        try writeJSON(invalidEnvelope, to: fileURL)
+
+        XCTAssertThrowsError(try store.load()) { error in
+            self.assertPersistenceError(
+                error,
+                expectedOperation: .load,
+                expectedCode: .malformedPayload
+            )
+            XCTAssertTrue(
+                (error as? TopologyProjectPersistenceError)?.detail.contains(
+                    "invalidRuntimeWebAdministrationConfiguration"
+                ) == true
+            )
+        }
+    }
+
+    func testHostLabelPolicyAndJavaMACIdentityRoundTripNativelyAndThroughFiliusXML() throws {
+        let expectedMACAddress = "55:69:1F:18:4C:96"
+        let node = TopologyNode(
+            id: uuid("10101010-1010-1010-1010-101010101011"),
+            kind: .pc,
+            displayName: "Lab Host",
+            hostLabelPolicy: .ipAndMAC,
+            position: CGPoint(x: 120, y: 80),
+            ports: [
+                TopologyPortMetadata(
+                    id: uuid("10101010-1010-1010-1010-101010101012"),
+                    label: "eth0",
+                    importedMACAddress: expectedMACAddress
+                )
+            ]
+        )
+        var state = TopologyEditorState()
+        state.graph = TopologyGraph(nodes: [node], links: [])
+        state.runtimeDeviceConfigurations[node.id] = TopologyRuntimeDeviceConfiguration(
+            ipAddress: "10.0.0.10",
+            subnetMask: "255.255.255.0"
+        )
+        let store = TopologyProjectStore(fileURL: tempDirectoryURL.appendingPathComponent("host-label.json"))
+
+        try store.save(state: state, savedAt: Date(timeIntervalSince1970: 1_700_000_051))
+        let loaded = try store.load()
+        let loadedNode = try XCTUnwrap(loaded.graph.node(withID: node.id))
+        XCTAssertEqual(loadedNode.hostLabelPolicy, .ipAndMAC)
+        XCTAssertEqual(loadedNode.ports.first?.importedMACAddress, expectedMACAddress)
+        XCTAssertEqual(loaded.displayLabel(for: loadedNode), "10.0.0.10 (\(expectedMACAddress))")
+
+        let persistedData = try Data(contentsOf: store.fileURL)
+        let persistedText = try XCTUnwrap(String(data: persistedData, encoding: .utf8))
+        XCTAssertTrue(persistedText.contains("\"importedMACAddress\":\"\(expectedMACAddress)\""))
+
+        let xml = try TopologyProjectStore.exportFiliusConfigurationXML(from: loaded)
+        let text = try XCTUnwrap(String(data: xml, encoding: .utf8))
+        XCTAssertTrue(text.contains("property=\"useIPAsName\""))
+        XCTAssertTrue(text.contains("property=\"useMACAsName\""))
+        XCTAssertTrue(text.contains("<void property=\"mac\"><string>\(expectedMACAddress)</string></void>"))
+
+        let imported = try TopologyProjectStore.importFiliusConfigurationXML(xml)
+        let importedNode = try XCTUnwrap(imported.state.graph.nodes.first)
+        XCTAssertEqual(importedNode.hostLabelPolicy, .ipAndMAC)
+        XCTAssertEqual(importedNode.ports.first?.importedMACAddress, expectedMACAddress)
+        XCTAssertEqual(imported.state.displayLabel(for: importedNode), "10.0.0.10 (\(expectedMACAddress))")
+    }
+
+    func testCurrentSchemaIgnoresMalformedOptionalImportedMACAddress() throws {
+        let fileURL = tempDirectoryURL.appendingPathComponent("malformed-imported-mac.json")
+        let nodeID = uuid("11111111-1111-1111-1111-111111111111")
+        let portID = uuid("22222222-2222-2222-2222-222222222222")
+        var envelope = envelopeDictionary()
+        var payload = envelope["payload"] as! [String: Any]
+        var graph = payload["graph"] as! [String: Any]
+        graph["nodes"] = [[
+            "id": nodeID.uuidString,
+            "kind": TopologyNodeKind.pc.rawValue,
+            "displayName": "PC",
+            "hostLabelPolicy": TopologyHostLabelPolicy.manual.rawValue,
+            "position": ["x": 20.0, "y": 20.0],
+            "ports": [[
+                "id": portID.uuidString,
+                "label": "eth0",
+                "isOccupied": false,
+                "importedMACAddress": "not-a-mac",
+            ]],
+        ]]
+        payload["graph"] = graph
+        payload["virtualFileSystems"] = [[
+            "nodeID": nodeID.uuidString,
+            "entries": [],
+        ]]
+        envelope["payload"] = payload
+        try writeJSON(envelope, to: fileURL)
+
+        let loaded = try TopologyProjectStore(fileURL: fileURL).load()
+        let loadedNode = try XCTUnwrap(loaded.graph.node(withID: nodeID))
+        let loadedPort = try XCTUnwrap(loadedNode.ports.first { $0.id == portID })
+
+        XCTAssertNil(loadedPort.importedMACAddress)
+        XCTAssertEqual(
+            loadedPort.effectiveMACAddress,
+            TopologyPortMetadata.stableGeneratedMACAddress(for: portID)
+        )
+    }
+
+    func testSampleFiliusImportExportPreservesEveryInterfaceMACAddress() throws {
+        let fixtureData = try loadSampleFLSFixture(named: "zwei_rechnernetze_komplett.konfiguration.xml")
+        let imported = try TopologyProjectStore.importFiliusConfigurationXML(fixtureData)
+
+        let expectedMACAddressesByNodeName = [
+            "DNS-Server 2.10": ["55:69:1F:18:4C:96"],
+            "Notebook 1.10": ["95:11:22:49:65:CB"],
+            "Notebook 1.11": ["AE:F4:7A:63:81:B9"],
+            "Vermittlungsrechner": ["A4:F4:2A:89:9F:E8", "6D:B4:5B:F1:70:FC"],
+        ]
+        let importedMACAddressesByNodeName = Dictionary(
+            uniqueKeysWithValues: imported.state.graph.nodes.compactMap { node -> (String, [String])? in
+                let addresses = node.ports.compactMap(\.importedMACAddress)
+                return addresses.isEmpty ? nil : (node.displayName, addresses)
+            }
+        )
+        XCTAssertEqual(importedMACAddressesByNodeName, expectedMACAddressesByNodeName)
+
+        let exported = try TopologyProjectStore.exportFiliusConfigurationXML(from: imported.state)
+        let reopened = try TopologyProjectStore.importFiliusConfigurationXML(exported)
+        let reopenedMACAddressesByNodeName = Dictionary(
+            uniqueKeysWithValues: reopened.state.graph.nodes.compactMap { node -> (String, [String])? in
+                let addresses = node.ports.compactMap(\.importedMACAddress)
+                return addresses.isEmpty ? nil : (node.displayName, addresses)
+            }
+        )
+        XCTAssertEqual(reopenedMACAddressesByNodeName, expectedMACAddressesByNodeName)
+    }
+
+    func testLocalNetworkRemoteLinkConfigurationRoundTripsNativeSchemaTen() throws {
+        let node = TopologyNode(
+            id: uuid("10101010-1010-1010-1010-101010101010"),
+            kind: .remoteLink,
+            displayName: "Classroom Link",
+            position: CGPoint(x: 120, y: 80)
+        )
+        let configuration = TopologyRemoteLinkConfiguration(
+            pairIdentifier: "classroom-production-link",
+            latencyMilliseconds: 75,
+            isEnabled: true,
+            transportMode: .localNetwork,
+            lanRole: .join,
+            lanPort: 12_345,
+            lanJoinMethod: .manual,
+            lanRemoteHost: "192.168.1.42",
+            lanRemotePort: 23_456
+        )
+        var state = TopologyEditorState()
+        state.graph = TopologyGraph(nodes: [node], links: [])
+        state.remoteLinkConfigurationsByNodeID[node.id] = configuration
+        let store = TopologyProjectStore(fileURL: tempDirectoryURL.appendingPathComponent("lan-remote-link.json"))
+
+        try store.save(state: state, savedAt: Date(timeIntervalSince1970: 1_700_000_050))
+        let loaded = try store.load()
+
+        XCTAssertEqual(loaded.remoteLinkConfigurationsByNodeID[node.id], configuration)
+    }
+
     func testSchemaEightMigratesProtocolApplicationsToEmpty() throws {
         let fileURL = tempDirectoryURL.appendingPathComponent("schema-8-protocol-migration.json")
         let store = TopologyProjectStore(fileURL: fileURL)
@@ -442,6 +782,42 @@ final class TopologyProjectPersistenceTests: XCTestCase {
             XCTAssertTrue(
                 (error as? TopologyProjectPersistenceError)?.detail.contains(
                     "remoteLinkConfigurationHasBlankPairIdentifier"
+                ) == true
+            )
+        }
+    }
+
+    func testSchemaVersionTenRejectsInvalidManualLANRemoteLinkEndpoint() throws {
+        let nodeID = uuid("54545454-5454-5454-5454-545454545451")
+        let portID = uuid("54545454-5454-5454-5454-545454545452")
+        let payload = remoteLinkPayload(
+            nodeID: nodeID,
+            portID: portID,
+            remoteLinkConfigurations: [[
+                "nodeID": nodeID.uuidString,
+                "pairIdentifier": "classroom-link",
+                "latencyMilliseconds": 20,
+                "isEnabled": true,
+                "transportMode": TopologyRemoteLinkTransportMode.localNetwork.rawValue,
+                "lanRole": TopologyRemoteLinkLANRole.join.rawValue,
+                "lanPort": 12_345,
+                "lanJoinMethod": TopologyRemoteLinkLANJoinMethod.manual.rawValue,
+                "lanRemoteHost": "   ",
+                "lanRemotePort": 0
+            ]]
+        )
+        let fileURL = tempDirectoryURL.appendingPathComponent("schema-v10-invalid-lan-remote-link.json")
+        try writeJSON(envelopeDictionary(schemaVersion: 10, payload: payload), to: fileURL)
+
+        XCTAssertThrowsError(try TopologyProjectStore(fileURL: fileURL).load()) { error in
+            self.assertPersistenceError(
+                error,
+                expectedOperation: .load,
+                expectedCode: .malformedPayload
+            )
+            XCTAssertTrue(
+                (error as? TopologyProjectPersistenceError)?.detail.contains(
+                    "remoteLinkConfigurationHasInvalidLANPort"
                 ) == true
             )
         }
@@ -1512,6 +1888,116 @@ final class TopologyProjectPersistenceTests: XCTestCase {
         XCTAssertEqual(imported.report.warnings, [])
     }
 
+    func testFiliusCompatibilityRoundTripPreservesDNSRecursionAndInterfaceForwarder() throws {
+        let node = TopologyNode(
+            id: uuid("D1500000-0000-0000-0000-000000000001"),
+            kind: .pc,
+            displayName: "Recursive DNS",
+            position: CGPoint(x: 48, y: 72)
+        )
+        var state = TopologyEditorState()
+        state.graph = TopologyGraph(nodes: [node], links: [])
+        state.runtimeInstalledProgramsByNodeID[node.id] = [.dnsServer]
+        state.runtimeDeviceConfigurations[node.id] = TopologyRuntimeDeviceConfiguration(
+            ipAddress: "10.0.0.53",
+            subnetMask: "255.255.255.0",
+            dnsServer: "10.0.0.54"
+        )
+        state.runtimeDNSServerConfigurationsByNodeID[node.id] = TopologyRuntimeDNSServerConfiguration(
+            typedRecords: [
+                try XCTUnwrap(
+                    TopologyDNSResourceRecord(
+                        name: "example.test",
+                        type: .nameServer,
+                        target: "ns.example.test"
+                    )
+                )
+            ],
+            recursiveResolutionEnabled: true,
+            forwardingServerIPAddress: "10.0.0.54"
+        )
+
+        let exported = try TopologyProjectStore.exportFiliusConfigurationXMLWithReport(from: state)
+        let xml = try XCTUnwrap(String(data: exported.data, encoding: .utf8))
+        XCTAssertTrue(xml.contains("<void property=\"recursiveResolutionEnabled\"><boolean>true</boolean></void>"))
+        XCTAssertTrue(xml.contains("<void property=\"dns\"><string>10.0.0.54</string></void>"))
+        XCTAssertEqual(exported.report.warnings, [])
+
+        let imported = try TopologyProjectStore.importFiliusConfigurationXML(exported.data)
+        let importedNode = try XCTUnwrap(imported.state.graph.nodes.first)
+        let configuration = try XCTUnwrap(imported.state.runtimeDNSServerConfigurationsByNodeID[importedNode.id])
+        XCTAssertTrue(configuration.recursiveResolutionEnabled)
+        XCTAssertEqual(configuration.forwardingServerIPAddress, "10.0.0.54")
+        XCTAssertEqual(
+            configuration.typedRecords.map { "\($0.name.rawValue)|\($0.type.rawValue)|\($0.target)" },
+            ["example.test|NS|ns.example.test."]
+        )
+        XCTAssertEqual(imported.report.warnings, [])
+    }
+
+    func testFiliusCompatibilityImportTreatsSelfDNSAsNoSeparateRecursiveForwarder() throws {
+        let node = TopologyNode(
+            id: uuid("D1500000-0000-0000-0000-000000000002"),
+            kind: .pc,
+            displayName: "Authoritative DNS",
+            position: CGPoint(x: 48, y: 72)
+        )
+        var state = TopologyEditorState()
+        state.graph = TopologyGraph(nodes: [node], links: [])
+        state.runtimeInstalledProgramsByNodeID[node.id] = [.dnsServer]
+        state.runtimeDeviceConfigurations[node.id] = TopologyRuntimeDeviceConfiguration(
+            ipAddress: "10.0.0.53",
+            subnetMask: "255.255.255.0",
+            dnsServer: "10.0.0.53"
+        )
+        state.runtimeDNSServerConfigurationsByNodeID[node.id] = TopologyRuntimeDNSServerConfiguration(
+            recursiveResolutionEnabled: true
+        )
+
+        let exported = try TopologyProjectStore.exportFiliusConfigurationXMLWithReport(from: state)
+        XCTAssertEqual(exported.report.warnings, [])
+
+        let imported = try TopologyProjectStore.importFiliusConfigurationXML(exported.data)
+        let importedNode = try XCTUnwrap(imported.state.graph.nodes.first)
+        let configuration = try XCTUnwrap(imported.state.runtimeDNSServerConfigurationsByNodeID[importedNode.id])
+        XCTAssertTrue(configuration.recursiveResolutionEnabled)
+        XCTAssertNil(configuration.forwardingServerIPAddress)
+    }
+
+    func testFiliusCompatibilityExportWarnsWhenSeparateDNSForwarderCannotBeRepresented() throws {
+        let node = TopologyNode(
+            id: uuid("D1500000-0000-0000-0000-000000000003"),
+            kind: .pc,
+            displayName: "Split DNS",
+            position: CGPoint(x: 48, y: 72)
+        )
+        var state = TopologyEditorState()
+        state.graph = TopologyGraph(nodes: [node], links: [])
+        state.runtimeInstalledProgramsByNodeID[node.id] = [.dnsServer]
+        state.runtimeDeviceConfigurations[node.id] = TopologyRuntimeDeviceConfiguration(
+            ipAddress: "10.0.0.53",
+            subnetMask: "255.255.255.0",
+            dnsServer: "10.0.0.1"
+        )
+        state.runtimeDNSServerConfigurationsByNodeID[node.id] = TopologyRuntimeDNSServerConfiguration(
+            recursiveResolutionEnabled: true,
+            forwardingServerIPAddress: "10.0.0.54"
+        )
+
+        let first = try TopologyProjectStore.exportFiliusConfigurationXMLWithReport(from: state)
+        let second = try TopologyProjectStore.exportFiliusConfigurationXMLWithReport(from: state)
+        let expectedWarning = "DNS Server on 'Split DNS' cannot preserve recursive forwarding exactly: native forwarder is '10.0.0.54', while Java FILIUS derives it from the host interface DNS field as '10.0.0.1'; exported the host DNS value unchanged."
+
+        XCTAssertEqual(first.report.warnings, [expectedWarning])
+        XCTAssertEqual(second.report.warnings, [expectedWarning])
+
+        let imported = try TopologyProjectStore.importFiliusConfigurationXML(first.data)
+        let importedNode = try XCTUnwrap(imported.state.graph.nodes.first)
+        let configuration = try XCTUnwrap(imported.state.runtimeDNSServerConfigurationsByNodeID[importedNode.id])
+        XCTAssertTrue(configuration.recursiveResolutionEnabled)
+        XCTAssertEqual(configuration.forwardingServerIPAddress, "10.0.0.1")
+    }
+
     func testFiliusCompatibilityRoundTripPreservesImportedHardwareName() throws {
         var state = TopologyEditorState()
         let node = TopologyNode(
@@ -2510,9 +2996,9 @@ final class TopologyProjectPersistenceTests: XCTestCase {
     }
 
     func testUnknownJavaApplicationAndArchivePayloadRoundTripWhileNativeEditsWin() throws {
-        let fixtureURL = repositoryRootURL(from: #filePath)
-            .appendingPathComponent("ios/FiliusPadTests/Fixtures/FLS/java-xmle-opaque-payload.xml")
-        let imported = try TopologyProjectStore.importFiliusConfigurationXML(Data(contentsOf: fixtureURL))
+        let imported = try TopologyProjectStore.importFiliusConfigurationXML(
+            loadRepositorySampleFLSArchive(named: "java-xmle-opaque-payload.xml")
+        )
         XCTAssertEqual(imported.state.graph.nodes.count, 2)
         XCTAssertEqual(imported.state.graph.links.count, 1)
         XCTAssertEqual(imported.state.documentationItems.count, 1)
@@ -3589,6 +4075,12 @@ final class TopologyProjectPersistenceTests: XCTestCase {
         }
         if schemaVersion >= 8, resolvedPayload["runtimeDNSServerConfigurations"] == nil {
             resolvedPayload["runtimeDNSServerConfigurations"] = []
+        }
+        if schemaVersion == 12, resolvedPayload["runtimeWebAdministrationPolicies"] == nil {
+            resolvedPayload["runtimeWebAdministrationPolicies"] = []
+        }
+        if schemaVersion >= 13, resolvedPayload["runtimeWebAdministrationConfigurations"] == nil {
+            resolvedPayload["runtimeWebAdministrationConfigurations"] = []
         }
         if schemaVersion >= 9 {
             if resolvedPayload["protocolApplicationDefinitions"] == nil {

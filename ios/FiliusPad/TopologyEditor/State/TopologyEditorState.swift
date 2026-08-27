@@ -25,6 +25,8 @@ enum TopologyRuntimeEventCode: String, Equatable {
     case simulationTickAdvanced
     case simulationTickIgnoredWhileStopped
     case simulationSpeedChanged
+    case globalPacketLossChanged
+    case globalPacketLossChangeIgnoredWhileStopped
     case simulationFaultReported
     case simulationFaultRejectedMalformedPayload
     case runtimeDeviceOpened
@@ -47,6 +49,10 @@ enum TopologyRuntimeEventCode: String, Equatable {
     case runtimeSwitchSATCleared
     case runtimePortForwardingConfigurationSaved
     case runtimePortForwardingConfigurationRejected
+    case runtimeWebAdministrationConfigurationSaved
+    case runtimeWebAdministrationConfigurationRejected
+    case runtimeWebAdministrationRequestServed
+    case runtimeWebAdministrationRequestRejected
     case runtimeProgramInstalled
     case runtimeProgramUninstalled
     case runtimeProgramLaunched
@@ -110,6 +116,7 @@ enum TopologyRuntimeEventCode: String, Equatable {
     case dnsServerStopped
     case dnsServerStopIgnoredAlreadyStopped
     case dnsServerRejectedInvalidConfiguration
+    case webServerConfigurationSaved
     case webServerStarted
     case webServerStartIgnoredAlreadyRunning
     case webServerStopped
@@ -145,6 +152,8 @@ enum TopologyRuntimeEventCode: String, Equatable {
     case emailClientSendRejected
     case emailClientRetrieveSucceeded
     case emailClientRetrieveRejected
+    case emailClientMessagesDeleted
+    case emailClientDeleteRejected
     case emailServerConfigured
     case emailServerStarted
     case emailServerStopped
@@ -241,28 +250,80 @@ struct TopologySwitchConfiguration: Equatable {
     }
 }
 
+enum TopologyRemoteLinkTransportMode: String, Codable, CaseIterable, Equatable, Sendable {
+    case inProject
+    case localNetwork
+}
+
+enum TopologyRemoteLinkLANRole: String, Codable, CaseIterable, Equatable, Sendable {
+    case host
+    case join
+}
+
+enum TopologyRemoteLinkLANJoinMethod: String, Codable, CaseIterable, Equatable, Sendable {
+    case bonjour
+    case manual
+}
+
 struct TopologyRemoteLinkConfiguration: Equatable {
     static let defaultLatencyMilliseconds: UInt64 = 20
+    static let defaultLANPort: UInt16 = 12_345
+
+    private static let shareCodeLowerBound = 100_000
+    private static let shareCodeCount = 900_000
 
     var pairIdentifier: String
     var latencyMilliseconds: UInt64
     var isEnabled: Bool
+    var transportMode: TopologyRemoteLinkTransportMode
+    var lanRole: TopologyRemoteLinkLANRole
+    var lanPort: UInt16
+    var lanJoinMethod: TopologyRemoteLinkLANJoinMethod
+    var lanRemoteHost: String
+    var lanRemotePort: UInt16
 
     init(
         pairIdentifier: String,
         latencyMilliseconds: UInt64 = defaultLatencyMilliseconds,
-        isEnabled: Bool = true
+        isEnabled: Bool = true,
+        transportMode: TopologyRemoteLinkTransportMode = .inProject,
+        lanRole: TopologyRemoteLinkLANRole = .host,
+        lanPort: UInt16 = defaultLANPort,
+        lanJoinMethod: TopologyRemoteLinkLANJoinMethod = .bonjour,
+        lanRemoteHost: String = "",
+        lanRemotePort: UInt16 = defaultLANPort
     ) {
         self.pairIdentifier = pairIdentifier
         self.latencyMilliseconds = latencyMilliseconds
         self.isEnabled = isEnabled
+        self.transportMode = transportMode
+        self.lanRole = lanRole
+        self.lanPort = lanPort
+        self.lanJoinMethod = lanJoinMethod
+        self.lanRemoteHost = lanRemoteHost
+        self.lanRemotePort = lanRemotePort
     }
 
-    static func defaultConfiguration(nodeID: UUID) -> TopologyRemoteLinkConfiguration {
+    static func defaultConfiguration(
+        nodeID: UUID,
+        avoiding reservedPairIdentifiers: Set<String> = []
+    ) -> TopologyRemoteLinkConfiguration {
         let compactIdentifier = nodeID.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-        return TopologyRemoteLinkConfiguration(
-            pairIdentifier: "link-\(compactIdentifier.prefix(6))"
+        let seed = Int(String(compactIdentifier.prefix(8)), radix: 16) ?? 0
+        let reservedIdentifiers = Set(
+            reservedPairIdentifiers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         )
+        var candidate = shareCodeLowerBound + (seed % shareCodeCount)
+
+        for _ in 0..<shareCodeCount {
+            let shareCode = String(candidate)
+            if !reservedIdentifiers.contains(shareCode) {
+                return TopologyRemoteLinkConfiguration(pairIdentifier: shareCode)
+            }
+            candidate = shareCodeLowerBound + ((candidate - shareCodeLowerBound + 1) % shareCodeCount)
+        }
+
+        return TopologyRemoteLinkConfiguration(pairIdentifier: String(candidate))
     }
 }
 
@@ -619,10 +680,145 @@ struct TopologyRuntimeDNSRecord: Equatable {
 }
 
 struct TopologyRuntimeDNSServerConfiguration: Equatable {
+    /// Legacy A-record projection retained for Java-compatible callers and old archives.
     var recordsByHostname: [String: TopologyRuntimeDNSRecord]
+    /// Canonical Java-compatible record order. For compatibility, `recordsByHostname` mirrors the
+    /// first A record for each hostname; this ordered collection remains the source of truth.
+    var additionalTypedRecords: [TopologyDNSResourceRecord]
+    var recursiveResolutionEnabled: Bool
+    var forwardingServerIPAddress: String?
 
-    init(recordsByHostname: [String: TopologyRuntimeDNSRecord] = [:]) {
+    var typedRecords: [TopologyDNSResourceRecord] {
+        var records = additionalTypedRecords
+        let representedHostnames = Set(records.compactMap { record -> String? in
+            record.type == .address ? record.name.rawValue : nil
+        })
+        for hostname in recordsByHostname.keys.sorted() where !representedHostnames.contains(hostname) {
+            guard let legacy = recordsByHostname[hostname],
+                  let record = TopologyDNSResourceRecord(legacyARecord: legacy)
+            else { continue }
+            records.append(record)
+        }
+        return records
+    }
+
+    init(
+        recordsByHostname: [String: TopologyRuntimeDNSRecord] = [:],
+        typedRecords: [TopologyDNSResourceRecord] = [],
+        recursiveResolutionEnabled: Bool = false,
+        forwardingServerIPAddress: String? = nil
+    ) {
         self.recordsByHostname = recordsByHostname
+        self.additionalTypedRecords = typedRecords
+        self.recursiveResolutionEnabled = recursiveResolutionEnabled
+        self.forwardingServerIPAddress = forwardingServerIPAddress
+        normalizeTypedStorage()
+    }
+
+    init(
+        typedRecords: [TopologyDNSResourceRecord],
+        recursiveResolutionEnabled: Bool = false,
+        forwardingServerIPAddress: String? = nil
+    ) {
+        self.init(
+            recordsByHostname: [:],
+            typedRecords: typedRecords,
+            recursiveResolutionEnabled: recursiveResolutionEnabled,
+            forwardingServerIPAddress: forwardingServerIPAddress
+        )
+    }
+
+    @discardableResult
+    mutating func appendLegacyAddressRecord(_ record: TopologyRuntimeDNSRecord) -> Bool {
+        guard let appendedRecord = TopologyDNSResourceRecord(legacyARecord: record) else {
+            return false
+        }
+        let alreadyExists = additionalTypedRecords.contains {
+            $0.name == appendedRecord.name
+                && $0.type == appendedRecord.type
+                && $0.target == appendedRecord.target
+        }
+        guard !alreadyExists else {
+            return false
+        }
+
+        additionalTypedRecords.append(appendedRecord)
+        if recordsByHostname[record.hostname] == nil {
+            recordsByHostname[record.hostname] = record
+        }
+        return true
+    }
+
+    mutating func addTypedRecord(_ record: TopologyDNSResourceRecord) {
+        additionalTypedRecords.removeAll {
+            $0.name == record.name && $0.type == record.type && $0.target == record.target
+        }
+        additionalTypedRecords.append(record)
+        if record.type == .address, let legacy = record.legacyARecord,
+           recordsByHostname[legacy.hostname] == nil {
+            recordsByHostname[legacy.hostname] = legacy
+        }
+    }
+
+    @discardableResult
+    mutating func removeTypedRecord(
+        hostname: String,
+        recordType: TopologyDNSRecordType,
+        target: String
+    ) -> Bool {
+        let before = additionalTypedRecords.count
+        additionalTypedRecords.removeAll {
+            $0.name.rawValue == hostname && $0.type == recordType && $0.target == target
+        }
+        var removed = before != additionalTypedRecords.count
+        if recordType == .address,
+           recordsByHostname[hostname]?.targetIPAddress == target {
+            recordsByHostname.removeValue(forKey: hostname)
+            if let replacement = additionalTypedRecords.first(where: {
+                $0.name.rawValue == hostname && $0.type == .address
+            })?.legacyARecord {
+                recordsByHostname[hostname] = replacement
+            }
+            removed = true
+        }
+        return removed
+    }
+
+    @discardableResult
+    mutating func removeLegacyAddressRecord(hostname: String) -> TopologyRuntimeDNSRecord? {
+        let projectedRecord = recordsByHostname[hostname]
+        guard let recordIndex = additionalTypedRecords.firstIndex(where: {
+            $0.name.rawValue == hostname && $0.type == .address
+        }) else {
+            return recordsByHostname.removeValue(forKey: hostname)
+        }
+
+        let removedRecord = additionalTypedRecords.remove(at: recordIndex).legacyARecord ?? projectedRecord
+        recordsByHostname.removeValue(forKey: hostname)
+        if let promotedRecord = additionalTypedRecords.first(where: {
+            $0.name.rawValue == hostname && $0.type == .address
+        })?.legacyARecord {
+            recordsByHostname[hostname] = promotedRecord
+        }
+        return removedRecord
+    }
+
+    private mutating func normalizeTypedStorage() {
+        var firstAddresses: [String: TopologyRuntimeDNSRecord] = [:]
+        for record in additionalTypedRecords where record.type == .address {
+            guard let legacy = record.legacyARecord, firstAddresses[legacy.hostname] == nil else { continue }
+            firstAddresses[legacy.hostname] = legacy
+        }
+        for (hostname, legacy) in firstAddresses {
+            recordsByHostname[hostname] = legacy
+        }
+
+        for hostname in recordsByHostname.keys.sorted() where firstAddresses[hostname] == nil {
+            guard let legacy = recordsByHostname[hostname],
+                  let record = TopologyDNSResourceRecord(legacyARecord: legacy)
+            else { continue }
+            additionalTypedRecords.append(record)
+        }
     }
 }
 
@@ -663,6 +859,17 @@ enum TopologyRuntimeDNSHostsFile {
             records[record.hostname] = record
         }
         return records
+    }
+
+    static func typedRecords(from text: String) -> [TopologyDNSResourceRecord] {
+        TopologyDNSHostsFileCodec.records(from: text)
+    }
+
+    static func text(
+        mirroringTypedRecords records: [TopologyDNSResourceRecord],
+        preserving existingText: String
+    ) -> String {
+        TopologyDNSHostsFileCodec.text(mirroring: records, preserving: existingText)
     }
 
     static func text(
@@ -775,6 +982,154 @@ struct TopologyPersistenceFailure: Equatable {
     let occurredAt: Date
 }
 
+
+struct TopologyRuntimeWebAdministrationConfiguration: Codable, Equatable {
+    static let defaultPort = 80
+
+    var port: Int
+    var accessPolicy: TopologyRuntimeWebAdministrationAccessPolicy
+
+    init(
+        port: Int = Self.defaultPort,
+        accessPolicy: TopologyRuntimeWebAdministrationAccessPolicy = TopologyRuntimeWebAdministrationAccessPolicy()
+    ) {
+        self.port = port
+        self.accessPolicy = accessPolicy
+    }
+}
+
+extension TopologyEditorState {
+    /// Builds the secret-free projection consumed by the router/gateway administration renderer.
+    ///
+    /// The projection is intentionally derived from editor/runtime state at request time so a
+    /// rendered page cannot outlive a configuration change or expose credentials and payloads.
+    func runtimeWebAdministrationSnapshot(for nodeID: UUID) -> TopologyRuntimeWebAdministrationSnapshot? {
+        guard let node = graph.node(withID: nodeID), node.kind == .router || node.kind == .gateway else {
+            return nil
+        }
+
+        let interfaces = networkRuntime.networkInterfaces(nodeID: nodeID).map { interface in
+            TopologyRuntimeWebAdministrationInterfaceStatus(
+                name: node.ports.first(where: { $0.id == interface.portID })?.label ?? "if\(interface.index)",
+                ipAddress: interface.ipAddress,
+                subnetMask: interface.subnetMask,
+                macAddress: interface.macAddress,
+                isUp: simulationPhase == .running
+            )
+        }
+
+        var routes = (runtimeManualRoutesByNodeID[nodeID] ?? []).enumerated().map { index, route in
+            TopologyRuntimeWebAdministrationRouteStatus(
+                id: "manual-\(index)",
+                destinationNetwork: route.destinationNetwork,
+                subnetMask: route.subnetMask,
+                gatewayIPAddress: route.gateway,
+                interfaceIPAddress: route.interfaceIPAddress
+            )
+        }
+        routes.append(contentsOf: (networkRuntime.state.ripTablesByNodeID[nodeID] ?? []).enumerated().map { index, route in
+            TopologyRuntimeWebAdministrationRouteStatus(
+                id: "rip-\(index)",
+                destinationNetwork: route.destinationNetwork,
+                subnetMask: route.subnetMask,
+                gatewayIPAddress: route.nextHop,
+                interfaceIPAddress: route.interfaceIPAddress
+            )
+        })
+
+        let dhcpConfiguration = runtimeDHCPServerConfigurationsByNodeID[nodeID] ?? TopologyDHCPServerConfiguration()
+        let activeLeaseCount = networkRuntime.state.dhcpLeasesByIPAddress.values.filter {
+            $0.serverNodeID == nodeID
+        }.count
+        let dhcp = TopologyRuntimeWebAdministrationDHCPStatus(
+            isActive: dhcpConfiguration.isActive,
+            lowerBoundIPAddress: dhcpConfiguration.lowerBoundIPAddress,
+            upperBoundIPAddress: dhcpConfiguration.upperBoundIPAddress,
+            gatewayIPAddress: dhcpConfiguration.gatewayIPAddress,
+            dnsServerIPAddress: dhcpConfiguration.dnsServerIPAddress,
+            usesOwnSettings: dhcpConfiguration.useOwnSettings,
+            activeLeaseCount: activeLeaseCount,
+            staticAssignmentCount: dhcpConfiguration.staticAssignments.count
+        )
+
+        let natMappings = networkRuntime.natMappings(gatewayNodeID: nodeID).map { mapping in
+            TopologyRuntimeWebAdministrationNATMappingStatus(
+                id: mapping.id.uuidString,
+                protocolName: String(mapping.protocolNumber.rawValue),
+                publicEndpoint: "\(mapping.remoteIPAddress):\(mapping.translatedPortOrIdentifier)",
+                privateEndpoint: "\(mapping.lanIPAddress):\(mapping.lanPortOrIdentifier)",
+                state: mapping.type.rawValue
+            )
+        }
+
+        let portForwards = (runtimePortForwardingRowsByNodeID[nodeID] ?? []).enumerated().compactMap {
+            index, row -> TopologyRuntimeWebAdministrationPortForwardStatus? in
+            guard row.isRuntimeValid,
+                  let protocolNumber = row.runtimeProtocol,
+                  let publicPort = row.runtimePublicPort,
+                  let lanPort = row.runtimeLANPort else {
+                return nil
+            }
+            return TopologyRuntimeWebAdministrationPortForwardStatus(
+                id: "port-forward-\(index)",
+                protocolName: String(protocolNumber.rawValue),
+                publicPort: publicPort,
+                lanIPAddress: row.lanIPAddress,
+                lanPort: lanPort
+            )
+        }
+
+        let firewallConfiguration = runtimeFirewallConfigurationsByNodeID[nodeID] ?? TopologyFirewallConfiguration()
+        let firewallRules = firewallConfiguration.rules.enumerated().map { index, rule in
+            TopologyRuntimeWebAdministrationFirewallRuleStatus(
+                id: "rule-\(index)",
+                source: "\(rule.sourceIPAddress)/\(rule.sourceSubnetMask)",
+                destination: "\(rule.destinationIPAddress)/\(rule.destinationSubnetMask)",
+                protocolName: rule.protocolType.javaLabel,
+                port: rule.port == TopologyFirewallRule.allPorts ? "*" : String(rule.port),
+                action: rule.action.javaLabel
+            )
+        }
+        let firewall = TopologyRuntimeWebAdministrationFirewallStatus(
+            isActive: firewallConfiguration.isActive,
+            defaultPolicy: firewallConfiguration.defaultPolicy.javaLabel,
+            dropsICMP: firewallConfiguration.dropICMP,
+            filtersSYNSegmentsOnly: firewallConfiguration.filterSYNSegmentsOnly,
+            filtersUDP: firewallConfiguration.filterUDP,
+            rules: firewallRules
+        )
+
+        return TopologyRuntimeWebAdministrationSnapshot(
+            deviceName: node.displayName,
+            deviceKind: node.kind.rawValue,
+            uptimeMilliseconds: networkRuntime.state.currentTimeMilliseconds,
+            interfaces: interfaces,
+            routes: routes,
+            dhcp: dhcp,
+            natMappings: natMappings,
+            portForwards: portForwards,
+            firewall: firewall
+        )
+    }
+
+    /// Renders a router/gateway administration request from the current state.
+    /// Returns nil for non-router/gateway nodes so callers cannot accidentally expose a
+    /// generic device as an administration endpoint.
+    func runtimeWebAdministrationResponse(
+        for nodeID: UUID,
+        request: TopologyRuntimeWebAdministrationRequest
+    ) -> TopologyRuntimeWebAdministrationResponse? {
+        guard let snapshot = runtimeWebAdministrationSnapshot(for: nodeID) else { return nil }
+        let policy = runtimeWebAdministrationConfigurationsByNodeID[nodeID]?.accessPolicy
+            ?? TopologyRuntimeWebAdministrationAccessPolicy()
+        return TopologyRuntimeWebAdministrationRenderer.render(
+            request: request,
+            policy: policy,
+            snapshot: snapshot
+        )
+    }
+}
+
 struct TopologyEditorState: Equatable {
     var graph = TopologyGraph()
     var selectedNodeIDs: Set<UUID> = []
@@ -806,9 +1161,35 @@ struct TopologyEditorState: Equatable {
     var runtimeDNSServerConfigurationsByNodeID: [UUID: TopologyRuntimeDNSServerConfiguration] = [:]
     var runtimeDNSServerSocketIDByNodeID: [UUID: UUID] = [:]
     var runtimeDNSCacheByNodeID: [UUID: [String: TopologyRuntimeDNSCacheEntry]] = [:]
+    /// Transient per-client cache for A/MX/NS answers, including recursive dependencies and TTLs.
+    var runtimeTypedDNSResolverCacheByNodeID: [UUID: TopologyDNSResolverCache] = [:]
     var runtimeWebServerByNodeID: [UUID: TopologyRuntimeServiceProcessState] = [:]
     /// Persisted HTTP server configuration; the running listener and request log remain transient.
     var runtimeWebServerConfigurationsByNodeID: [UUID: TopologyRuntimeWebServerConfiguration] = [:]
+    /// Persisted router/gateway HTTP administration listener and access configuration.
+    var runtimeWebAdministrationConfigurationsByNodeID: [UUID: TopologyRuntimeWebAdministrationConfiguration] = [:]
+    /// Transient router/gateway administration listener process state.
+    var runtimeWebAdministrationByNodeID: [UUID: TopologyRuntimeServiceProcessState] = [:]
+    /// Transient router/gateway administration listener socket identifiers.
+    var runtimeWebAdministrationSocketIDByNodeID: [UUID: UUID] = [:]
+    /// Compatibility bridge for call sites that still read or replace access policies directly.
+    var runtimeWebAdministrationPoliciesByNodeID: [UUID: TopologyRuntimeWebAdministrationAccessPolicy] {
+        get {
+            runtimeWebAdministrationConfigurationsByNodeID.mapValues(\.accessPolicy)
+        }
+        set {
+            let existingConfigurations = runtimeWebAdministrationConfigurationsByNodeID
+            runtimeWebAdministrationConfigurationsByNodeID = newValue.reduce(into: [:]) { result, entry in
+                result[entry.key] = TopologyRuntimeWebAdministrationConfiguration(
+                    port: existingConfigurations[entry.key]?.port
+                        ?? TopologyRuntimeWebAdministrationConfiguration.defaultPort,
+                    accessPolicy: entry.value
+                )
+            }
+        }
+    }
+    /// Last rendered administration response per router/gateway. This is transient request state.
+    var runtimeWebAdministrationResponsesByNodeID: [UUID: TopologyRuntimeWebAdministrationResponse] = [:]
     /// Persisted browser origin defaults; TCP sessions, response body, and history are transient.
     var runtimeWebBrowserConfigurationsByNodeID: [UUID: TopologyRuntimeWebBrowserConfiguration] = [:]
     var runtimeWebServerRequestLogsByNodeID: [UUID: [TopologyRuntimeWebServerRequestLogEntry]] = [:]
@@ -933,7 +1314,15 @@ extension TopologyEditorState {
             switchConfigurationsByNodeID[node.id] = .defaultConfiguration(nodeID: node.id)
         }
         if node.kind == .remoteLink, remoteLinkConfigurationsByNodeID[node.id] == nil {
-            remoteLinkConfigurationsByNodeID[node.id] = .defaultConfiguration(nodeID: node.id)
+            let reservedPairIdentifiers = Set(
+                remoteLinkConfigurationsByNodeID.values.map {
+                    $0.pairIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            )
+            remoteLinkConfigurationsByNodeID[node.id] = .defaultConfiguration(
+                nodeID: node.id,
+                avoiding: reservedPairIdentifiers
+            )
         }
         if node.kind.isPCClassEndpoint {
             if virtualFileSystemsByNodeID[node.id] == nil {
@@ -1002,14 +1391,19 @@ extension TopologyEditorState {
         guard runtimeInstalledProgramsByNodeID[nodeID]?.contains(.dnsServer) == true else { return }
         let text = virtualFileSystemsByNodeID[nodeID].flatMap { try? $0.textFile(at: TopologyRuntimeDNSHostsFile.path) }
         guard text != nil || clearWhenMissing else { return }
-        let records = text.map { TopologyRuntimeDNSHostsFile.records(from: $0) } ?? [:]
-        guard runtimeDNSServerConfigurationsByNodeID[nodeID]?.recordsByHostname != records else { return }
-        runtimeDNSServerConfigurationsByNodeID[nodeID] = TopologyRuntimeDNSServerConfiguration(recordsByHostname: records)
+        let typedRecords = text.map { TopologyRuntimeDNSHostsFile.typedRecords(from: $0) } ?? []
+        let previous = runtimeDNSServerConfigurationsByNodeID[nodeID]
+        guard previous?.typedRecords != typedRecords else { return }
+        runtimeDNSServerConfigurationsByNodeID[nodeID] = TopologyRuntimeDNSServerConfiguration(
+            typedRecords: typedRecords,
+            recursiveResolutionEnabled: previous?.recursiveResolutionEnabled ?? false,
+            forwardingServerIPAddress: previous?.forwardingServerIPAddress
+        )
         invalidateRuntimeDNSCache()
     }
 
     mutating func mirrorRuntimeDNSConfigurationToHostsFile(nodeID: UUID) throws {
-        let records = runtimeDNSServerConfigurationsByNodeID[nodeID]?.recordsByHostname ?? [:]
+        let records = runtimeDNSServerConfigurationsByNodeID[nodeID]?.typedRecords ?? []
         var fileSystem = virtualFileSystemsByNodeID[nodeID] ?? .defaultForDevice()
         if !fileSystem.contains(TopologyRuntimeDNSHostsFile.directoryPath) {
             try fileSystem.createDirectory(at: TopologyRuntimeDNSHostsFile.directoryPath, recursive: true)
@@ -1017,7 +1411,7 @@ extension TopologyEditorState {
         let existingText = (try? fileSystem.textFile(at: TopologyRuntimeDNSHostsFile.path)) ?? ""
         try fileSystem.writeTextFile(
             at: TopologyRuntimeDNSHostsFile.path,
-            text: TopologyRuntimeDNSHostsFile.text(mirroring: records, preserving: existingText)
+            text: TopologyRuntimeDNSHostsFile.text(mirroringTypedRecords: records, preserving: existingText)
         )
         var candidateFileSystems = virtualFileSystemsByNodeID
         candidateFileSystems[nodeID] = fileSystem
@@ -1032,20 +1426,18 @@ extension TopologyEditorState {
     ) -> TopologyRuntimeDNSResolutionResult {
         guard simulationPhase == .running else { return .simulationStopped }
         let normalizedHostname = hostname.lowercased()
-        guard let serverIPAddress = runtimeDeviceConfigurations[nodeID]?.dnsServer
+        guard let configuredServerIPAddress = runtimeDeviceConfigurations[nodeID]?.dnsServer
             .trimmingCharacters(in: .whitespacesAndNewlines),
-              !serverIPAddress.isEmpty, serverIPAddress != "0.0.0.0"
+              !configuredServerIPAddress.isEmpty, configuredServerIPAddress != "0.0.0.0"
         else { return .missingServerConfiguration }
 
-        synchronizeRuntimeDNSConfigurationFromHostsFile(nodeID: nodeID)
-        let now = networkRuntime.state.currentTimeMilliseconds
         if let cached = runtimeDNSCacheByNodeID[nodeID]?[normalizedHostname],
-           cached.serverIPAddress == serverIPAddress,
-           cached.expiresAtMilliseconds > now {
+           cached.serverIPAddress == configuredServerIPAddress,
+           cached.expiresAtMilliseconds > networkRuntime.state.currentTimeMilliseconds {
             networkRuntime.recordDNSCacheHit(
                 nodeID: nodeID,
                 hostname: normalizedHostname,
-                serverIPAddress: serverIPAddress,
+                serverIPAddress: configuredServerIPAddress,
                 targetIPAddress: cached.targetIPAddress
             )
             if let targetIPAddress = cached.targetIPAddress {
@@ -1054,30 +1446,70 @@ extension TopologyEditorState {
                         hostname: normalizedHostname,
                         targetIPAddress: targetIPAddress
                     ),
-                    serverIPAddress: serverIPAddress,
+                    serverIPAddress: configuredServerIPAddress,
                     cached: true
                 )
             }
-            return .nxdomain(hostname: normalizedHostname, serverIPAddress: serverIPAddress, cached: true)
+            return .nxdomain(
+                hostname: normalizedHostname,
+                serverIPAddress: configuredServerIPAddress,
+                cached: true
+            )
         }
 
         runtimeDNSCacheByNodeID[nodeID]?.removeValue(forKey: normalizedHostname)
-        let result = networkRuntime.resolveDNS(
-            clientNodeID: nodeID,
-            serverIPAddress: serverIPAddress,
-            hostname: normalizedHostname,
-            recordsByServerNodeID: runtimeDNSServerConfigurationsByNodeID,
+        let result = resolveRuntimeDNSQuestion(
+            nodeID: nodeID, hostname: normalizedHostname, recordType: .address,
             timeoutMilliseconds: timeoutMilliseconds
         )
+        let resolution: TopologyRuntimeDNSResolutionResult
+        switch result {
+        case .success(let answer):
+            guard case .address(let address)? = answer.records.first(where: { $0.type == .address })?.data
+            else {
+                resolution = .nxdomain(
+                    hostname: normalizedHostname,
+                    serverIPAddress: configuredServerIPAddress,
+                    cached: answer.trace.cacheHit
+                )
+                break
+            }
+            resolution = .success(
+                record: TopologyRuntimeDNSRecord(
+                    hostname: normalizedHostname, targetIPAddress: address.rawValue
+                ),
+                serverIPAddress: configuredServerIPAddress,
+                cached: answer.trace.cacheHit
+            )
+        case .nameError, .noData:
+            resolution = .nxdomain(
+                hostname: normalizedHostname,
+                serverIPAddress: configuredServerIPAddress,
+                cached: result.trace.cacheHit
+            )
+        case .failure(let failure, _):
+            switch failure {
+            case .serverUnavailable(let serverIPAddress):
+                resolution = .unreachable(serverIPAddress: serverIPAddress)
+            case .serverTimedOut(let serverIPAddress):
+                resolution = .timeout(serverIPAddress: serverIPAddress)
+            case .invalidStartingServerAddress:
+                resolution = .unreachable(serverIPAddress: configuredServerIPAddress)
+            case .referralMissingAddress, .loopDetected, .hopLimitExceeded,
+                    .responseLimitExceeded, .responseRecordLimitExceeded:
+                resolution = .timeout(serverIPAddress: configuredServerIPAddress)
+            }
+        }
+
         simulationTick = networkRuntime.state.currentTimeMilliseconds
         let expiresAt: UInt64
-        switch result {
+        switch resolution {
         case let .success(record, _, false):
             expiresAt = simulationTick &+ TopologyNetworkRuntimeEngine.dnsPositiveCacheTTLMilliseconds
             runtimeDNSCacheByNodeID[nodeID, default: [:]][normalizedHostname] = TopologyRuntimeDNSCacheEntry(
                 hostname: normalizedHostname,
                 targetIPAddress: record.targetIPAddress,
-                serverIPAddress: serverIPAddress,
+                serverIPAddress: configuredServerIPAddress,
                 expiresAtMilliseconds: expiresAt
             )
         case .nxdomain(_, _, false):
@@ -1085,13 +1517,123 @@ extension TopologyEditorState {
             runtimeDNSCacheByNodeID[nodeID, default: [:]][normalizedHostname] = TopologyRuntimeDNSCacheEntry(
                 hostname: normalizedHostname,
                 targetIPAddress: nil,
-                serverIPAddress: serverIPAddress,
+                serverIPAddress: configuredServerIPAddress,
                 expiresAtMilliseconds: expiresAt
             )
         case .success, .nxdomain, .unreachable, .timeout, .missingServerConfiguration, .simulationStopped:
             break
         }
+        return resolution
+    }
+
+    /// Resolves an A, MX, or NS question through running DNS services on the simulated network.
+    /// The pure resolver owns deterministic record/referral selection; each consultation is gated
+    /// by a real UDP exchange so routing, service state, firewall/NAT behavior, and packet loss apply.
+    mutating func resolveRuntimeDNSQuestion(
+        nodeID: UUID,
+        hostname: String,
+        recordType: TopologyDNSRecordType,
+        timeoutMilliseconds: UInt64 = TopologyNetworkRuntimeEngine.dnsDefaultTimeoutMilliseconds
+    ) -> TopologyDNSResolverResult {
+        let emptyTrace = TopologyDNSResolutionTrace(
+            consultedServerIPAddresses: [], hopCount: 0, responseCount: 0, cacheHit: false
+        )
+        guard simulationPhase == .running else {
+            guard TopologyDNSQuestion(name: hostname, type: recordType) != nil else {
+                return .failure(.invalidStartingServerAddress(hostname), trace: emptyTrace)
+            }
+            return .failure(.serverUnavailable("simulationStopped"), trace: emptyTrace)
+        }
+        guard let serverIPAddress = runtimeDeviceConfigurations[nodeID]?.dnsServer
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !serverIPAddress.isEmpty, serverIPAddress != "0.0.0.0",
+              let question = TopologyDNSQuestion(name: hostname, type: recordType)
+        else {
+            return .failure(.serverUnavailable("missingConfiguration"), trace: emptyTrace)
+        }
+
+        for serverNodeID in runtimeInstalledProgramsByNodeID.keys
+        where runtimeInstalledProgramsByNodeID[serverNodeID]?.contains(.dnsServer) == true {
+            synchronizeRuntimeDNSConfigurationFromHostsFile(nodeID: serverNodeID)
+        }
+
+        var serverNodeIDByIPAddress: [String: UUID] = [:]
+        let runningServerNodeIDs = runtimeDNSServerSocketIDByNodeID.keys.sorted {
+            $0.uuidString < $1.uuidString
+        }
+        let servers = runningServerNodeIDs.reduce(
+            into: [String: TopologyDNSServerSnapshot]()
+        ) { partialResult, serverNodeID in
+            let configuration = runtimeDNSServerConfigurationsByNodeID[serverNodeID]
+                ?? TopologyRuntimeDNSServerConfiguration()
+            guard networkRuntime.isDNSServerRunning(nodeID: serverNodeID),
+                  let ipAddress = runtimeDeviceConfigurations[serverNodeID]?.ipAddress,
+                  let snapshot = TopologyDNSServerSnapshot(
+                    ipAddress: ipAddress,
+                    records: configuration.typedRecords,
+                    recursiveResolutionEnabled: configuration.recursiveResolutionEnabled,
+                    forwardingServerIPAddress: configuration.forwardingServerIPAddress
+                  )
+            else { return }
+            partialResult[ipAddress] = snapshot
+            serverNodeIDByIPAddress[ipAddress] = serverNodeID
+        }
+
+        var resolverCache = runtimeTypedDNSResolverCacheByNodeID.removeValue(forKey: nodeID)
+            ?? TopologyDNSResolverCache()
+        let result = TopologyDNSResolver().resolve(
+            question,
+            startingAt: serverIPAddress,
+            serversByIPAddress: servers,
+            nowMilliseconds: networkRuntime.state.currentTimeMilliseconds,
+            cache: &resolverCache,
+            canConsultServer: { sourceServerIPAddress, destinationServerIPAddress, question in
+                let sourceNodeID: UUID
+                if let sourceServerIPAddress {
+                    guard let recursiveSourceNodeID = serverNodeIDByIPAddress[sourceServerIPAddress.rawValue]
+                    else { return .unreachable }
+                    sourceNodeID = recursiveSourceNodeID
+                } else {
+                    sourceNodeID = nodeID
+                }
+                return networkRuntime.consultDNSServerWithResult(
+                    clientNodeID: sourceNodeID,
+                    serverIPAddress: destinationServerIPAddress.rawValue,
+                    question: question,
+                    timeoutMilliseconds: timeoutMilliseconds
+                )
+            }
+        )
+        runtimeTypedDNSResolverCacheByNodeID[nodeID] = resolverCache
+        simulationTick = networkRuntime.state.currentTimeMilliseconds
         return result
+    }
+
+    func displayLabel(for node: TopologyNode) -> String {
+        guard node.kind.isPCClassEndpoint else { return node.displayName }
+        let activeIPCandidates = [
+            runtimeDHCPLeaseByNodeID[node.id]?.ipAddress,
+            runtimeDeviceConfigurations[node.id]?.ipAddress,
+        ]
+        let ipAddress = activeIPCandidates.lazy.compactMap { candidate -> String? in
+            guard let normalized = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  TopologyRuntimeDNSHostsFile.isValidIPv4Address(normalized)
+            else { return nil }
+            return normalized
+        }.first
+        let macAddress = node.ports.first?.effectiveMACAddress
+
+        switch node.hostLabelPolicy {
+        case .manual:
+            return node.displayName
+        case .ipAddress:
+            return ipAddress ?? node.displayName
+        case .macAddress:
+            return macAddress ?? node.displayName
+        case .ipAndMAC:
+            if let ipAddress, let macAddress { return "\(ipAddress) (\(macAddress))" }
+            return ipAddress ?? macAddress ?? node.displayName
+        }
     }
 
     mutating func invalidateRuntimeDNSCache(hostname: String? = nil) {
@@ -1100,8 +1642,14 @@ extension TopologyEditorState {
             for nodeID in Array(runtimeDNSCacheByNodeID.keys) {
                 runtimeDNSCacheByNodeID[nodeID]?.removeValue(forKey: normalizedHostname)
             }
+            if let name = TopologyDNSName(rawValue: normalizedHostname) {
+                for nodeID in Array(runtimeTypedDNSResolverCacheByNodeID.keys) {
+                    runtimeTypedDNSResolverCacheByNodeID[nodeID]?.invalidate(.names([name]))
+                }
+            }
         } else {
             runtimeDNSCacheByNodeID.removeAll()
+            runtimeTypedDNSResolverCacheByNodeID.removeAll()
         }
     }
 }
@@ -1128,6 +1676,7 @@ enum TopologyEditorAction: Equatable {
     case saveDesignDeviceConfiguration(
         nodeID: UUID?,
         displayName: String?,
+        hostLabelPolicy: TopologyHostLabelPolicy?,
         deviceConfiguration: TopologyRuntimeDeviceConfiguration?,
         interfaceConfigurations: [TopologyDesignInterfaceConfiguration]?,
         switchConfiguration: TopologySwitchConfiguration?,
@@ -1139,8 +1688,16 @@ enum TopologyEditorAction: Equatable {
     case startSimulation
     case stopSimulation
     case setSimulationSpeed(percent: Int?)
+    case setGlobalPacketLoss(enabled: Bool?)
     case simulationTick(step: UInt64?)
     case simulationFault(code: String?, message: String?)
+    case setLANRemoteLinkConnectionState(nodeID: UUID?, connectionState: TopologyRemoteLinkLANConnectionState?)
+    case completeLANRemoteLinkOutboundFrame(
+        nodeID: UUID?,
+        transmissionID: UInt64?,
+        result: TopologyRemoteLinkLANSendResult?
+    )
+    case receiveLANRemoteLinkFrame(nodeID: UUID?, frame: TopologyRemoteLinkWireFrame?)
     case openRuntimeDevice(nodeID: UUID?)
     case closeRuntimeDevice
     case saveRuntimeDeviceIP(nodeID: UUID?, ipAddress: String?, subnetMask: String?)
@@ -1155,6 +1712,9 @@ enum TopologyEditorAction: Equatable {
     case clearRuntimeSwitchSAT(nodeID: UUID?)
     case resetRuntimePacketCapture(nodeID: UUID?, interfaceID: UUID?)
     case saveRuntimePortForwardingRows(nodeID: UUID?, rows: [TopologyGatewayPortForwardingRow]?)
+    case saveRuntimeWebAdministrationConfiguration(nodeID: UUID?, configuration: TopologyRuntimeWebAdministrationConfiguration?)
+    case saveRuntimeWebAdministrationPolicy(nodeID: UUID?, policy: TopologyRuntimeWebAdministrationAccessPolicy?)
+    case runtimeWebAdministrationRequest(nodeID: UUID?, request: TopologyRuntimeWebAdministrationRequest?)
     case installRuntimeProgram(nodeID: UUID?, program: TopologyRuntimeInstallableProgram?)
     case uninstallRuntimeProgram(nodeID: UUID?, program: TopologyRuntimeInstallableProgram?)
     case launchRuntimeProgram(nodeID: UUID?, program: TopologyRuntimeInstallableProgram?)
@@ -1174,11 +1734,18 @@ enum TopologyEditorAction: Equatable {
     case runtimeDNSStart(nodeID: UUID?)
     case runtimeDNSStop(nodeID: UUID?)
     case runtimeDNSAddRecord(nodeID: UUID?, hostname: String?, targetIPAddress: String?)
+    case runtimeDNSAddTypedRecord(nodeID: UUID?, hostname: String?, recordType: TopologyDNSRecordType?, target: String?, ttlSeconds: UInt32?)
     case runtimeDNSRemoveRecord(nodeID: UUID?, hostname: String?)
+    case runtimeDNSRemoveTypedRecord(nodeID: UUID?, hostname: String?, recordType: TopologyDNSRecordType?, target: String?)
+    case runtimeDNSSetRecursion(nodeID: UUID?, enabled: Bool?, forwardingServerIPAddress: String?)
     case runtimeDNSResolveRecord(nodeID: UUID?, hostname: String?)
+    case runtimeDNSResolveTypedRecord(nodeID: UUID?, hostname: String?, recordType: TopologyDNSRecordType?)
+    case saveRuntimeWebServerConfiguration(nodeID: UUID?, configuration: TopologyRuntimeWebServerConfiguration?)
     case runtimeWebStart(nodeID: UUID?, port: String?)
     case runtimeWebStop(nodeID: UUID?)
     case runtimeWebRestart(nodeID: UUID?, port: String?)
+    case runtimeWebAdministrationStart(nodeID: UUID?, port: String?)
+    case runtimeWebAdministrationStop(nodeID: UUID?)
     case runtimeWebBrowserNavigate(nodeID: UUID?, address: String?)
     case runtimeWebBrowserBack(nodeID: UUID?)
     case runtimeWebBrowserForward(nodeID: UUID?)
@@ -1195,6 +1762,11 @@ enum TopologyEditorAction: Equatable {
     case runtimeEmailServerStop(nodeID: UUID?)
     case runtimeEmailClientSend(nodeID: UUID?, message: TopologyRuntimeEmailMessage?)
     case runtimeEmailClientRetrieve(nodeID: UUID?)
+    case runtimeEmailClientDeleteMessages(
+        nodeID: UUID?,
+        folder: TopologyRuntimeEmailClientFolder?,
+        messageIDs: [UInt64]?
+    )
     case saveRuntimeGnutellaConfiguration(nodeID: UUID?, configuration: TopologyRuntimeGnutellaConfiguration?)
     case runtimeGnutellaJoin(nodeID: UUID?, bootstrapIPAddress: String?)
     case runtimeGnutellaResetNetwork(nodeID: UUID?)

@@ -1,8 +1,1121 @@
 import CoreGraphics
+import Darwin
+import Network
 import XCTest
 @testable import FiliusPad
 
 final class TopologyNetworkRuntimeEngineTests: XCTestCase {
+    func testLANRemoteLinkWireCodecRoundTripsUDPFrame() throws {
+        let frame = TopologyEthernetFrame(
+            identity: 41,
+            sourceMACAddress: "AA:BB:CC:DD:EE:01",
+            destinationMACAddress: "AA:BB:CC:DD:EE:02",
+            payload: .ipv4(TopologyIPv4Packet(
+                identity: 42,
+                senderIPAddress: "10.0.0.1",
+                receiverIPAddress: "10.0.0.2",
+                timeToLive: 63,
+                protocolNumber: .udp,
+                payload: .udp(TopologyUDPDatagram(
+                    sourcePort: 1234,
+                    destinationPort: 4321,
+                    payload: Data("hello".utf8)
+                ))
+            ))
+        )
+        let wireFrame = TopologyRemoteLinkWireFrame(frame: frame)
+        let codec = TopologyRemoteLinkWireCodec(linkCode: "classroom-link-code")
+        let (local, remote) = lanRemoteLinkHandshakes(linkCode: "classroom-link-code")
+        var sender = try codec.makeSessionCodec(localHandshake: local, remoteHandshake: remote)
+        var receiver = try codec.makeSessionCodec(localHandshake: remote, remoteHandshake: local)
+
+        let encoded = try sender.encode(.frame(wireFrame))
+        let decoded = try receiver.decode(encoded.record)
+
+        XCTAssertEqual(decoded.message, .frame(wireFrame))
+        XCTAssertLessThan(encoded.record.count, TopologyRemoteLinkWireCodec.maximumRecordBytes)
+    }
+
+    func testLANRemoteLinkWireCodecRoundTripsEverySupportedEthernetPayload() throws {
+        let embeddedPacket = TopologyIPv4Packet(
+            identity: 30,
+            senderIPAddress: "10.0.0.1",
+            receiverIPAddress: "10.0.0.2",
+            timeToLive: 1,
+            protocolNumber: .udp,
+            payload: .udp(TopologyUDPDatagram(sourcePort: 53, destinationPort: 54, payload: Data("dns".utf8)))
+        )
+        let frames = [
+            TopologyEthernetFrame(
+                identity: 10,
+                sourceMACAddress: "AA:BB:CC:DD:EE:01",
+                destinationMACAddress: TopologyNetworkRuntimeEngine.ethernetBroadcastMACAddress,
+                payload: .arp(TopologyARPPacket(
+                    operation: .request,
+                    senderMACAddress: "AA:BB:CC:DD:EE:01",
+                    senderIPAddress: "10.0.0.1",
+                    targetMACAddress: TopologyNetworkRuntimeEngine.unspecifiedMACAddress,
+                    targetIPAddress: "10.0.0.2"
+                ))
+            ),
+            TopologyEthernetFrame(
+                identity: 20,
+                sourceMACAddress: "AA:BB:CC:DD:EE:01",
+                destinationMACAddress: "AA:BB:CC:DD:EE:02",
+                payload: .ipv4(TopologyIPv4Packet(
+                    identity: 21,
+                    senderIPAddress: "10.0.0.1",
+                    receiverIPAddress: "10.0.0.2",
+                    timeToLive: 63,
+                    protocolNumber: .icmp,
+                    payload: .icmp(TopologyICMPMessage(
+                        kind: .timeExceeded,
+                        identifier: 7,
+                        sequenceNumber: 8,
+                        data: Data("icmp".utf8),
+                        embeddedOriginalPacket: embeddedPacket
+                    ))
+                ))
+            ),
+            TopologyEthernetFrame(
+                identity: 40,
+                sourceMACAddress: "AA:BB:CC:DD:EE:01",
+                destinationMACAddress: "AA:BB:CC:DD:EE:02",
+                payload: .ipv4(TopologyIPv4Packet(
+                    identity: 41,
+                    senderIPAddress: "10.0.0.1",
+                    receiverIPAddress: "10.0.0.2",
+                    timeToLive: 62,
+                    protocolNumber: .tcp,
+                    payload: .tcp(TopologyTCPSegment(
+                        sourcePort: 1_234,
+                        destinationPort: 80,
+                        sequenceNumber: 99,
+                        acknowledgementNumber: 100,
+                        flags: [.push, .acknowledgement],
+                        payload: Data("GET /".utf8)
+                    ))
+                ))
+            ),
+            TopologyEthernetFrame(
+                identity: 50,
+                sourceMACAddress: "AA:BB:CC:DD:EE:01",
+                destinationMACAddress: "AA:BB:CC:DD:EE:02",
+                payload: .ipv4(TopologyIPv4Packet(
+                    identity: 51,
+                    senderIPAddress: "10.0.0.1",
+                    receiverIPAddress: "10.0.0.2",
+                    timeToLive: 61,
+                    protocolNumber: .udp,
+                    payload: .udp(TopologyUDPDatagram(
+                        sourcePort: 1_234,
+                        destinationPort: 4_321,
+                        payload: Data("hello".utf8)
+                    ))
+                ))
+            ),
+        ]
+        let codec = TopologyRemoteLinkWireCodec(linkCode: "classroom-link-code")
+        let (local, remote) = lanRemoteLinkHandshakes(linkCode: "classroom-link-code")
+        var sender = try codec.makeSessionCodec(localHandshake: local, remoteHandshake: remote)
+        var receiver = try codec.makeSessionCodec(localHandshake: remote, remoteHandshake: local)
+
+        for frame in frames {
+            let wireFrame = TopologyRemoteLinkWireFrame(frame: frame)
+            let encoded = try sender.encode(.frame(wireFrame))
+            XCTAssertEqual(try receiver.decode(encoded.record).message, .frame(wireFrame))
+        }
+    }
+
+    func testLANRemoteLinkWireCodecRejectsWrongLinkCode() throws {
+        let correctCodec = TopologyRemoteLinkWireCodec(linkCode: "correct-code")
+        let handshake = TopologyRemoteLinkWireHandshake(
+            protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion,
+            linkDigest: TopologyRemoteLinkWireCodec.digest(for: "correct-code"),
+            endpointID: UUID(),
+            endpointName: "Correct iPad"
+        )
+        let encoded = try correctCodec.encode(.hello(handshake))
+
+        XCTAssertThrowsError(try TopologyRemoteLinkWireCodec(linkCode: "wrong-code").decode(encoded)) { error in
+            XCTAssertEqual(error as? TopologyRemoteLinkWireCodecError, .authenticationFailed)
+        }
+    }
+
+    func testLANRemoteLinkWireCodecRejectsCorruptionUnsupportedVersionAndOversizedRecords() throws {
+        let codec = TopologyRemoteLinkWireCodec(linkCode: "classroom-link-code")
+        let validHandshake = TopologyRemoteLinkWireHandshake(
+            protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion,
+            linkDigest: TopologyRemoteLinkWireCodec.digest(for: "classroom-link-code"),
+            endpointID: UUID(),
+            endpointName: "Valid iPad"
+        )
+        var corrupted = try codec.encode(.hello(validHandshake))
+        corrupted[corrupted.startIndex] ^= 0x01
+        XCTAssertThrowsError(try codec.decode(corrupted)) { error in
+            XCTAssertEqual(error as? TopologyRemoteLinkWireCodecError, .authenticationFailed)
+        }
+
+        let unsupportedHandshake = TopologyRemoteLinkWireHandshake(
+            protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion + 1,
+            linkDigest: TopologyRemoteLinkWireCodec.digest(for: "classroom-link-code"),
+            endpointID: UUID(),
+            endpointName: "Future iPad"
+        )
+        let unsupportedRecord = try codec.encode(.hello(unsupportedHandshake))
+        XCTAssertThrowsError(try codec.decode(unsupportedRecord)) { error in
+            XCTAssertEqual(
+                error as? TopologyRemoteLinkWireCodecError,
+                .unsupportedVersion(TopologyRemoteLinkWireCodec.protocolVersion + 1)
+            )
+        }
+
+        let peerHandshake = TopologyRemoteLinkWireHandshake(
+            protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion,
+            linkDigest: TopologyRemoteLinkWireCodec.digest(for: "classroom-link-code"),
+            endpointID: uuid("00000000-0000-0000-0000-00000000D001"),
+            endpointName: "Peer iPad"
+        )
+        var sessionCodec = try codec.makeSessionCodec(
+            localHandshake: validHandshake,
+            remoteHandshake: peerHandshake
+        )
+        let oversizedPayload = Data(repeating: 0x41, count: TopologyRemoteLinkWireCodec.maximumRecordBytes)
+        let oversizedFrame = TopologyRemoteLinkWireFrame(frame: TopologyEthernetFrame(
+            identity: 1,
+            sourceMACAddress: "AA:AA:AA:AA:AA:01",
+            destinationMACAddress: "AA:AA:AA:AA:AA:02",
+            payload: .ipv4(TopologyIPv4Packet(
+                identity: 2,
+                senderIPAddress: "10.0.0.1",
+                receiverIPAddress: "10.0.0.2",
+                timeToLive: 64,
+                protocolNumber: .udp,
+                payload: .udp(TopologyUDPDatagram(sourcePort: 1, destinationPort: 2, payload: oversizedPayload))
+            ))
+        ))
+        XCTAssertThrowsError(try sessionCodec.encode(.frame(oversizedFrame))) { error in
+            XCTAssertEqual(error as? TopologyRemoteLinkWireCodecError, .recordTooLarge)
+        }
+    }
+
+
+    func testLANRemoteLinkSessionCodecDerivesSharedKeysAndRejectsReplay() throws {
+        let codec = TopologyRemoteLinkWireCodec(linkCode: "classroom-link-code")
+        let host = TopologyRemoteLinkWireHandshake(
+            protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion,
+            linkDigest: TopologyRemoteLinkWireCodec.digest(for: "classroom-link-code"),
+            endpointID: uuid("00000000-0000-0000-0000-00000000D101"),
+            endpointName: "Host iPad",
+            sessionID: uuid("00000000-0000-0000-0000-00000000D102"),
+            challenge: Data(repeating: 0x11, count: TopologyRemoteLinkWireHandshake.challengeByteCount)
+        )
+        let join = TopologyRemoteLinkWireHandshake(
+            protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion,
+            linkDigest: TopologyRemoteLinkWireCodec.digest(for: "classroom-link-code"),
+            endpointID: uuid("00000000-0000-0000-0000-00000000D201"),
+            endpointName: "Join iPad",
+            sessionID: uuid("00000000-0000-0000-0000-00000000D202"),
+            challenge: Data(repeating: 0x22, count: TopologyRemoteLinkWireHandshake.challengeByteCount)
+        )
+        var hostSession = try codec.makeSessionCodec(localHandshake: host, remoteHandshake: join)
+        var joinSession = try codec.makeSessionCodec(localHandshake: join, remoteHandshake: host)
+
+        let ready = try hostSession.encode(.sessionReady)
+        XCTAssertEqual(try joinSession.decode(ready.record).message, .sessionReady)
+        XCTAssertThrowsError(try joinSession.decode(ready.record)) { error in
+            XCTAssertEqual(
+                error as? TopologyRemoteLinkWireCodecError,
+                .unexpectedSequence(expected: 2, received: 1)
+            )
+        }
+    }
+
+    func testLANRemoteLinkSessionCodecRejectsRecordsFromAnotherSession() throws {
+        let codec = TopologyRemoteLinkWireCodec(linkCode: "classroom-link-code")
+        let host = TopologyRemoteLinkWireHandshake(
+            protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion,
+            linkDigest: TopologyRemoteLinkWireCodec.digest(for: "classroom-link-code"),
+            endpointID: uuid("00000000-0000-0000-0000-00000000D301"),
+            endpointName: "Host iPad",
+            sessionID: uuid("00000000-0000-0000-0000-00000000D302"),
+            challenge: Data(repeating: 0x31, count: TopologyRemoteLinkWireHandshake.challengeByteCount)
+        )
+        let firstJoin = TopologyRemoteLinkWireHandshake(
+            protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion,
+            linkDigest: TopologyRemoteLinkWireCodec.digest(for: "classroom-link-code"),
+            endpointID: uuid("00000000-0000-0000-0000-00000000D401"),
+            endpointName: "Join iPad",
+            sessionID: uuid("00000000-0000-0000-0000-00000000D402"),
+            challenge: Data(repeating: 0x41, count: TopologyRemoteLinkWireHandshake.challengeByteCount)
+        )
+        let secondJoin = TopologyRemoteLinkWireHandshake(
+            protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion,
+            linkDigest: TopologyRemoteLinkWireCodec.digest(for: "classroom-link-code"),
+            endpointID: firstJoin.endpointID,
+            endpointName: firstJoin.endpointName,
+            sessionID: uuid("00000000-0000-0000-0000-00000000D403"),
+            challenge: Data(repeating: 0x42, count: TopologyRemoteLinkWireHandshake.challengeByteCount)
+        )
+        var firstHostSession = try codec.makeSessionCodec(localHandshake: host, remoteHandshake: firstJoin)
+        var secondJoinSession = try codec.makeSessionCodec(localHandshake: secondJoin, remoteHandshake: host)
+        let firstSessionRecord = try firstHostSession.encode(.sessionReady)
+
+        XCTAssertThrowsError(try secondJoinSession.decode(firstSessionRecord.record)) { error in
+            XCTAssertEqual(error as? TopologyRemoteLinkWireCodecError, .authenticationFailed)
+        }
+    }
+
+    func testLANRemoteLinkSessionCodecRequiresStrictlyOrderedRecords() throws {
+        let codec = TopologyRemoteLinkWireCodec(linkCode: "classroom-link-code")
+        let host = TopologyRemoteLinkWireHandshake(
+            protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion,
+            linkDigest: TopologyRemoteLinkWireCodec.digest(for: "classroom-link-code"),
+            endpointID: uuid("00000000-0000-0000-0000-00000000D501"),
+            endpointName: "Host iPad",
+            sessionID: uuid("00000000-0000-0000-0000-00000000D502"),
+            challenge: Data(repeating: 0x51, count: TopologyRemoteLinkWireHandshake.challengeByteCount)
+        )
+        let join = TopologyRemoteLinkWireHandshake(
+            protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion,
+            linkDigest: TopologyRemoteLinkWireCodec.digest(for: "classroom-link-code"),
+            endpointID: uuid("00000000-0000-0000-0000-00000000D601"),
+            endpointName: "Join iPad",
+            sessionID: uuid("00000000-0000-0000-0000-00000000D602"),
+            challenge: Data(repeating: 0x61, count: TopologyRemoteLinkWireHandshake.challengeByteCount)
+        )
+        var hostSession = try codec.makeSessionCodec(localHandshake: host, remoteHandshake: join)
+        var joinSession = try codec.makeSessionCodec(localHandshake: join, remoteHandshake: host)
+        _ = try hostSession.encode(.sessionReady)
+        let secondRecord = try hostSession.encode(.keepAlive)
+
+        XCTAssertThrowsError(try joinSession.decode(secondRecord.record)) { error in
+            XCTAssertEqual(
+                error as? TopologyRemoteLinkWireCodecError,
+                .unexpectedSequence(expected: 1, received: 2)
+            )
+        }
+    }
+
+    func testLANRemoteLinkHandshakeCodecRejectsSessionTraffic() throws {
+        let codec = TopologyRemoteLinkWireCodec(linkCode: "classroom-link-code")
+        XCTAssertThrowsError(try codec.encode(.keepAlive)) { error in
+            XCTAssertEqual(error as? TopologyRemoteLinkWireCodecError, .invalidHandshake)
+        }
+    }
+
+    func testLANRemoteLinkBonjourSelectionCanReuseUnchangedCachedResult() {
+        let expected = NWEndpoint.service(
+            name: "Filius-abcdef123456-Host",
+            type: "_filiuslink._tcp",
+            domain: "local.",
+            interface: nil
+        )
+        let endpoints: [NWEndpoint] = [
+            .service(name: "Unrelated", type: "_filiuslink._tcp", domain: "local.", interface: nil),
+            expected,
+        ]
+
+        XCTAssertEqual(
+            TopologyRemoteLinkLANBonjourSelection.matchingEndpoint(
+                in: endpoints,
+                servicePrefix: "Filius-abcdef123456"
+            ),
+            expected
+        )
+    }
+
+    func testLANRemoteLinkWireFrameMaterializationAllocatesFreshLocalIdentities() {
+        let original = TopologyEthernetFrame(
+            identity: 900,
+            sourceMACAddress: "AA:BB:CC:DD:EE:01",
+            destinationMACAddress: "AA:BB:CC:DD:EE:02",
+            payload: .ipv4(TopologyIPv4Packet(
+                identity: 901,
+                senderIPAddress: "10.0.0.1",
+                receiverIPAddress: "10.0.0.2",
+                timeToLive: 64,
+                protocolNumber: .icmp,
+                payload: .icmp(TopologyICMPMessage(
+                    kind: .timeExceeded,
+                    identifier: 7,
+                    sequenceNumber: 8,
+                    embeddedOriginalPacket: TopologyIPv4Packet(
+                        identity: 902,
+                        senderIPAddress: "10.0.0.1",
+                        receiverIPAddress: "10.0.0.2",
+                        timeToLive: 1,
+                        protocolNumber: .udp,
+                        payload: .udp(TopologyUDPDatagram(sourcePort: 1, destinationPort: 2, payload: Data()))
+                    )
+                ))
+            ))
+        )
+        var engine = TopologyNetworkRuntimeEngine(seed: 1)
+        engine.handle(.start(snapshot: .empty, seed: 1, initialTimeMilliseconds: 0))
+
+        let materialized = engine.materializeLANRemoteLinkFrame(TopologyRemoteLinkWireFrame(frame: original))
+
+        XCTAssertEqual(materialized.identity, 1)
+        guard case let .ipv4(packet) = materialized.payload else { return XCTFail("Expected IPv4") }
+        XCTAssertEqual(packet.identity, 1)
+        XCTAssertEqual(packet.senderIPAddress, "10.0.0.1")
+        guard case let .icmp(message) = packet.payload else { return XCTFail("Expected ICMP") }
+        XCTAssertEqual(message.embeddedOriginalPacket?.identity, 2)
+    }
+
+    func testLANRemoteLinkQueuesCompleteEthernetFrameWhenConnected() {
+        let hostID = uuid("00000000-0000-0000-0000-00000000AA01")
+        let hostPortID = uuid("00000000-0000-0000-0000-00000000AA02")
+        let remoteID = uuid("00000000-0000-0000-0000-00000000AA03")
+        let remotePortID = uuid("00000000-0000-0000-0000-00000000AA04")
+        let snapshot = TopologyNetworkRuntimeTopologySnapshot(
+            nodes: [
+                pc(hostID, hostPortID),
+                TopologyNetworkRuntimeNodeSnapshot(
+                    id: remoteID,
+                    kind: .remoteLink,
+                    ports: [TopologyNetworkRuntimePortSnapshot(id: remotePortID, label: "remote0")]
+                ),
+            ],
+            links: [link(hostID, hostPortID, remoteID, remotePortID)],
+            deviceConfigurations: [hostID: device("10.0.0.1")],
+            interfaceConfigurations: [:],
+            manualRoutesByNodeID: [:],
+            remoteLinkConfigurationsByNodeID: [remoteID: TopologyRemoteLinkConfiguration(
+                pairIdentifier: "shared-production-link-code",
+                latencyMilliseconds: 20,
+                transportMode: .localNetwork,
+                lanRole: .host
+            )]
+        )
+        var engine = TopologyNetworkRuntimeEngine(seed: 99)
+        engine.handle(.start(snapshot: snapshot, seed: 99, initialTimeMilliseconds: 0))
+        engine.setLANRemoteLinkConnectionState(nodeID: remoteID, connectionState: .connected(peerName: "Peer iPad"))
+        let frame = TopologyEthernetFrame(
+            identity: engine.allocateFrameIdentity(),
+            sourceMACAddress: TopologyNetworkRuntimeEngine.stableMACAddress(for: hostPortID),
+            destinationMACAddress: TopologyNetworkRuntimeEngine.ethernetBroadcastMACAddress,
+            payload: .arp(TopologyARPPacket(
+                operation: .request,
+                senderMACAddress: TopologyNetworkRuntimeEngine.stableMACAddress(for: hostPortID),
+                senderIPAddress: "10.0.0.1",
+                targetMACAddress: TopologyNetworkRuntimeEngine.unspecifiedMACAddress,
+                targetIPAddress: "10.0.0.2"
+            ))
+        )
+
+        engine.sendEthernetFrame(fromNodeID: hostID, outgoingPortID: hostPortID, frame: frame)
+        XCTAssertEqual(engine.remoteLinkRuntimeStatus(nodeID: remoteID)?.pendingFrameCount, 1)
+        _ = engine.handle(.advance(toMilliseconds: 5_000))
+        let outbound = engine.claimLANRemoteLinkOutboundFrames()
+
+        XCTAssertEqual(engine.remoteLinkRuntimeStatus(nodeID: remoteID)?.pendingFrameCount, 1)
+        XCTAssertEqual(outbound.count, 1)
+        XCTAssertEqual(outbound.first?.nodeID, remoteID)
+        XCTAssertEqual(outbound.first?.frameIdentity, frame.identity)
+        XCTAssertEqual(outbound.first?.frame, TopologyRemoteLinkWireFrame(frame: frame))
+        XCTAssertEqual(outbound.first?.state, .awaitingControllerAcknowledgement)
+        XCTAssertFalse(engine.remoteLinkRuntimeEvidence.contains { evidence in
+            evidence.frameIdentity == frame.identity && evidence.kind == .delivered
+        })
+
+        guard let transmissionID = outbound.first?.transmissionID else {
+            return XCTFail("Expected a claimed LAN transmission")
+        }
+        engine.completeLANRemoteLinkOutboundFrame(
+            nodeID: remoteID,
+            transmissionID: transmissionID,
+            result: .accepted(attempts: 1)
+        )
+
+        XCTAssertEqual(engine.remoteLinkRuntimeStatus(nodeID: remoteID)?.pendingFrameCount, 0)
+        XCTAssertTrue(engine.remoteLinkRuntimeEvidence.contains { evidence in
+            evidence.frameIdentity == frame.identity && evidence.kind == .delivered
+        })
+    }
+
+    @MainActor
+    func testLANRemoteLinkControllerHandshakeTimeoutReleasesHostForNextPeer() async throws {
+        let port = try availableLoopbackPort()
+        let controller = TopologyRemoteLinkLANController(
+            handshakeTimeoutSeconds: 0.2,
+            acknowledgementTimeoutSeconds: 1
+        )
+        let nodeID = uuid("00000000-0000-0000-0000-00000000AC10")
+        let firstTimedOut = expectation(description: "first unauthenticated peer times out")
+        let secondTimedOut = expectation(description: "second unauthenticated peer times out")
+        var timeoutCount = 0
+        controller.onConnectionStateChange = { observedNodeID, state in
+            guard observedNodeID == nodeID,
+                  case let .failed(message) = state,
+                  message.contains("handshake timed out") else { return }
+            timeoutCount += 1
+            if timeoutCount == 1 {
+                firstTimedOut.fulfill()
+            } else if timeoutCount == 2 {
+                secondTimedOut.fulfill()
+            }
+        }
+        controller.reconcile(endpoints: [TopologyRemoteLinkLANEndpointConfiguration(
+            nodeID: nodeID,
+            endpointName: "Timeout Host",
+            linkCode: "timeout-link",
+            role: .host,
+            listenPort: port,
+            joinMethod: .bonjour,
+            remoteHost: "",
+            remotePort: port
+        )])
+        try await Task.sleep(for: .milliseconds(100))
+
+        let firstPeer = NWConnection(
+            host: .ipv4(.loopback),
+            port: NWEndpoint.Port(rawValue: port)!,
+            using: .tcp
+        )
+        firstPeer.start(queue: DispatchQueue(label: "test.remote-link.timeout.first"))
+        await fulfillment(of: [firstTimedOut], timeout: 2)
+        firstPeer.cancel()
+
+        let secondPeer = NWConnection(
+            host: .ipv4(.loopback),
+            port: NWEndpoint.Port(rawValue: port)!,
+            using: .tcp
+        )
+        secondPeer.start(queue: DispatchQueue(label: "test.remote-link.timeout.second"))
+        await fulfillment(of: [secondTimedOut], timeout: 2)
+        secondPeer.cancel()
+        controller.stopAll()
+
+        XCTAssertEqual(timeoutCount, 2)
+    }
+
+    @MainActor
+    func testLANRemoteLinkControllerCompletesFrameOnceAfterPeerAcknowledgement() async throws {
+        let port = try availableLoopbackPort()
+        let host = TopologyRemoteLinkLANController(
+            handshakeTimeoutSeconds: 1,
+            acknowledgementTimeoutSeconds: 1
+        )
+        let join = TopologyRemoteLinkLANController(
+            handshakeTimeoutSeconds: 1,
+            acknowledgementTimeoutSeconds: 1
+        )
+        let hostID = uuid("00000000-0000-0000-0000-00000000AC20")
+        let joinID = uuid("00000000-0000-0000-0000-00000000AC21")
+        let hostConnected = expectation(description: "host connected")
+        let joinConnected = expectation(description: "join connected")
+        let frameReceived = expectation(description: "peer received frame")
+        let sendCompleted = expectation(description: "send completed exactly once")
+        sendCompleted.assertForOverFulfill = true
+        var receivedFrame: TopologyRemoteLinkWireFrame?
+        var sendResults: [TopologyRemoteLinkLANSendResult] = []
+
+        host.onConnectionStateChange = { nodeID, state in
+            if nodeID == hostID, case .connected = state { hostConnected.fulfill() }
+        }
+        join.onConnectionStateChange = { nodeID, state in
+            if nodeID == joinID, case .connected = state { joinConnected.fulfill() }
+        }
+        join.onFrameReceived = { nodeID, frame in
+            guard nodeID == joinID else { return false }
+            receivedFrame = frame
+            frameReceived.fulfill()
+            return true
+        }
+        host.reconcile(endpoints: [TopologyRemoteLinkLANEndpointConfiguration(
+            nodeID: hostID,
+            endpointName: "Host iPad",
+            linkCode: "ack-link",
+            role: .host,
+            listenPort: port,
+            joinMethod: .bonjour,
+            remoteHost: "",
+            remotePort: port
+        )])
+        join.reconcile(endpoints: [TopologyRemoteLinkLANEndpointConfiguration(
+            nodeID: joinID,
+            endpointName: "Join iPad",
+            linkCode: "ack-link",
+            role: .join,
+            listenPort: port,
+            joinMethod: .manual,
+            remoteHost: "127.0.0.1",
+            remotePort: port
+        )])
+        await fulfillment(of: [hostConnected, joinConnected], timeout: 3)
+
+        let wireFrame = TopologyRemoteLinkWireFrame(
+            sourceMACAddress: "AA:BB:CC:DD:EE:01",
+            destinationMACAddress: "AA:BB:CC:DD:EE:02",
+            payload: .ipv4(TopologyRemoteLinkWireIPv4Packet(
+                senderIPAddress: "10.0.0.1",
+                receiverIPAddress: "10.0.0.2",
+                timeToLive: 64,
+                protocolNumber: .udp,
+                payload: .udp(TopologyRemoteLinkWireUDPDatagram(
+                    sourcePort: 1_234,
+                    destinationPort: 4_321,
+                    payload: Data("acknowledge me".utf8)
+                ))
+            ))
+        )
+        host.send(wireFrame, from: hostID) { result in
+            sendResults.append(result)
+            sendCompleted.fulfill()
+        }
+        await fulfillment(of: [frameReceived, sendCompleted], timeout: 3)
+        try await Task.sleep(for: .milliseconds(250))
+        host.stopAll()
+        join.stopAll()
+
+        XCTAssertEqual(receivedFrame, wireFrame)
+        XCTAssertEqual(sendResults, [.accepted(attempts: 1)])
+    }
+
+    @MainActor
+    func testLANRemoteLinkControllerDoesNotAcknowledgeDelayedApplicationAfterReceiverStops() async throws {
+        let port = try availableLoopbackPort()
+        let sender = TopologyRemoteLinkLANController(
+            handshakeTimeoutSeconds: 1,
+            acknowledgementTimeoutSeconds: 1
+        )
+        let receiver = TopologyRemoteLinkLANController(
+            handshakeTimeoutSeconds: 1,
+            acknowledgementTimeoutSeconds: 1
+        )
+        let senderID = uuid("00000000-0000-0000-0000-00000000AC40")
+        let receiverID = uuid("00000000-0000-0000-0000-00000000AC41")
+        let senderConnected = expectation(description: "sender connected")
+        let receiverConnected = expectation(description: "receiver connected")
+        let applicationDeliveryStarted = expectation(description: "application delivery started")
+        let sendCompleted = expectation(description: "send completed without false success")
+        sendCompleted.assertForOverFulfill = true
+        var applicationContinuation: CheckedContinuation<Bool, Never>?
+        var sendResults: [TopologyRemoteLinkLANSendResult] = []
+
+        sender.onConnectionStateChange = { nodeID, state in
+            if nodeID == senderID, case .connected = state { senderConnected.fulfill() }
+        }
+        receiver.onConnectionStateChange = { nodeID, state in
+            if nodeID == receiverID, case .connected = state { receiverConnected.fulfill() }
+        }
+        receiver.onFrameReceived = { nodeID, _ in
+            guard nodeID == receiverID else { return false }
+            applicationDeliveryStarted.fulfill()
+            return await withCheckedContinuation { continuation in
+                applicationContinuation = continuation
+            }
+        }
+        sender.reconcile(endpoints: [TopologyRemoteLinkLANEndpointConfiguration(
+            nodeID: senderID,
+            endpointName: "Delayed Sender",
+            linkCode: "delayed-application-link",
+            role: .host,
+            listenPort: port,
+            joinMethod: .bonjour,
+            remoteHost: "",
+            remotePort: port
+        )])
+        receiver.reconcile(endpoints: [TopologyRemoteLinkLANEndpointConfiguration(
+            nodeID: receiverID,
+            endpointName: "Delayed Receiver",
+            linkCode: "delayed-application-link",
+            role: .join,
+            listenPort: port,
+            joinMethod: .manual,
+            remoteHost: "127.0.0.1",
+            remotePort: port
+        )])
+        await fulfillment(of: [senderConnected, receiverConnected], timeout: 3)
+
+        let wireFrame = TopologyRemoteLinkWireFrame(
+            sourceMACAddress: "AA:BB:CC:DD:EE:40",
+            destinationMACAddress: "AA:BB:CC:DD:EE:41",
+            payload: .ipv4(TopologyRemoteLinkWireIPv4Packet(
+                senderIPAddress: "10.0.0.40",
+                receiverIPAddress: "10.0.0.41",
+                timeToLive: 64,
+                protocolNumber: .udp,
+                payload: .udp(TopologyRemoteLinkWireUDPDatagram(
+                    sourcePort: 4_040,
+                    destinationPort: 4_041,
+                    payload: Data("delay before acceptance".utf8)
+                ))
+            ))
+        )
+        sender.send(wireFrame, from: senderID) { result in
+            sendResults.append(result)
+            sendCompleted.fulfill()
+        }
+        await fulfillment(of: [applicationDeliveryStarted], timeout: 3)
+
+        receiver.stopAll()
+        applicationContinuation?.resume(returning: true)
+        applicationContinuation = nil
+
+        await fulfillment(of: [sendCompleted], timeout: 3)
+        try await Task.sleep(for: .milliseconds(250))
+        sender.stopAll()
+
+        XCTAssertEqual(sendResults.count, 1)
+        guard case .failed = sendResults[0] else {
+            return XCTFail("A stopped receiver must not acknowledge delayed application delivery")
+        }
+    }
+
+    @MainActor
+    func testLANRemoteLinkControllerCompletesInFlightSendExactlyOnceWhenStoppedBeforeAcknowledgement() async throws {
+        let port = try availableLoopbackPort()
+        let controller = TopologyRemoteLinkLANController(
+            handshakeTimeoutSeconds: 1,
+            acknowledgementTimeoutSeconds: 2
+        )
+        let nodeID = uuid("00000000-0000-0000-0000-00000000AC30")
+        let connected = expectation(description: "host authenticates raw peer")
+        controller.onConnectionStateChange = { observedNodeID, state in
+            if observedNodeID == nodeID, case .connected = state { connected.fulfill() }
+        }
+        controller.reconcile(endpoints: [TopologyRemoteLinkLANEndpointConfiguration(
+            nodeID: nodeID,
+            endpointName: "Exactly Once Host",
+            linkCode: "exactly-once-link",
+            role: .host,
+            listenPort: port,
+            joinMethod: .bonjour,
+            remoteHost: "",
+            remotePort: port
+        )])
+        try await Task.sleep(for: .milliseconds(100))
+
+        let peerReady = expectation(description: "raw peer connected")
+        let rawPeer = NWConnection(
+            host: .ipv4(.loopback),
+            port: NWEndpoint.Port(rawValue: port)!,
+            using: .tcp
+        )
+        rawPeer.stateUpdateHandler = { state in
+            if case .ready = state { peerReady.fulfill() }
+        }
+        rawPeer.start(queue: DispatchQueue(label: "test.remote-link.exactly-once.peer"))
+        await fulfillment(of: [peerReady], timeout: 2)
+
+        let handshakeCodec = TopologyRemoteLinkWireCodec(linkCode: "exactly-once-link")
+        let peerHandshake = TopologyRemoteLinkWireHandshake(
+            protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion,
+            linkDigest: TopologyRemoteLinkWireCodec.digest(for: "exactly-once-link"),
+            endpointID: uuid("00000000-0000-0000-0000-00000000AC31"),
+            endpointName: "Raw Peer",
+            sessionID: uuid("00000000-0000-0000-0000-00000000AC32"),
+            challenge: Data(repeating: 0xAC, count: TopologyRemoteLinkWireHandshake.challengeByteCount)
+        )
+        try await sendRemoteLinkRecord(handshakeCodec.encode(.hello(peerHandshake)), over: rawPeer)
+        let hostHelloRecord = try await receiveRemoteLinkRecord(over: rawPeer)
+        guard case let .hello(hostHandshake) = try handshakeCodec.decode(hostHelloRecord) else {
+            rawPeer.cancel()
+            controller.stopAll()
+            return XCTFail("Expected host handshake")
+        }
+        var peerSession = try handshakeCodec.makeSessionCodec(
+            localHandshake: peerHandshake,
+            remoteHandshake: hostHandshake
+        )
+        try await sendRemoteLinkRecord(try peerSession.encode(.sessionReady).record, over: rawPeer)
+        let hostReadyRecord = try await receiveRemoteLinkRecord(over: rawPeer)
+        XCTAssertEqual(try peerSession.decode(hostReadyRecord).message, .sessionReady)
+        await fulfillment(of: [connected], timeout: 2)
+
+        let completion = expectation(description: "in-flight send completes once")
+        completion.assertForOverFulfill = true
+        var results: [TopologyRemoteLinkLANSendResult] = []
+        let frame = TopologyRemoteLinkWireFrame(
+            sourceMACAddress: "AA:BB:CC:DD:EE:03",
+            destinationMACAddress: "AA:BB:CC:DD:EE:04",
+            payload: .ipv4(TopologyRemoteLinkWireIPv4Packet(
+                senderIPAddress: "10.0.0.3",
+                receiverIPAddress: "10.0.0.4",
+                timeToLive: 64,
+                protocolNumber: .udp,
+                payload: .udp(TopologyRemoteLinkWireUDPDatagram(
+                    sourcePort: 5_000,
+                    destinationPort: 5_001,
+                    payload: Data("stop before ack".utf8)
+                ))
+            ))
+        )
+        controller.send(frame, from: nodeID) { result in
+            results.append(result)
+            completion.fulfill()
+        }
+        let frameRecord = try await receiveRemoteLinkRecord(over: rawPeer)
+        XCTAssertEqual(try peerSession.decode(frameRecord).message, .frame(frame))
+
+        controller.stopAll()
+        await fulfillment(of: [completion], timeout: 2)
+        try await Task.sleep(for: .milliseconds(250))
+        rawPeer.cancel()
+
+        XCTAssertEqual(results, [.failed(.sessionStopped)])
+    }
+
+    @MainActor
+    func testLANRemoteLinkControllerReportsMissingSessionInsteadOfDroppingSilently() async {
+        let controller = TopologyRemoteLinkLANController()
+        let completion = expectation(description: "missing session completion")
+        let nodeID = uuid("00000000-0000-0000-0000-00000000AC01")
+        let frame = TopologyRemoteLinkWireFrame(frame: TopologyEthernetFrame(
+            identity: 1,
+            sourceMACAddress: "AA:AA:AA:AA:AA:01",
+            destinationMACAddress: "AA:AA:AA:AA:AA:02",
+            payload: .arp(TopologyARPPacket(
+                operation: .request,
+                senderMACAddress: "AA:AA:AA:AA:AA:01",
+                senderIPAddress: "10.0.0.1",
+                targetMACAddress: TopologyNetworkRuntimeEngine.unspecifiedMACAddress,
+                targetIPAddress: "10.0.0.2"
+            ))
+        ))
+        var observedResult: TopologyRemoteLinkLANSendResult?
+
+        controller.send(frame, from: nodeID) { result in
+            observedResult = result
+            completion.fulfill()
+        }
+        await fulfillment(of: [completion], timeout: 1.0)
+
+        XCTAssertEqual(observedResult, .failed(.sessionUnavailable))
+    }
+
+    @MainActor
+    func testLANRemoteLinkControllerCompletesQueuedPreHandshakeFrameWhenSessionStops() async {
+        let controller = TopologyRemoteLinkLANController()
+        let nodeID = uuid("00000000-0000-0000-0000-00000000AC02")
+        controller.reconcile(endpoints: [TopologyRemoteLinkLANEndpointConfiguration(
+            nodeID: nodeID,
+            endpointName: "Test iPad",
+            linkCode: "test-link",
+            role: .join,
+            listenPort: 55555,
+            joinMethod: .manual,
+            remoteHost: "",
+            remotePort: 55555
+        )])
+        let completion = expectation(description: "queued frame receives terminal result")
+        let frame = TopologyRemoteLinkWireFrame(frame: TopologyEthernetFrame(
+            identity: 2,
+            sourceMACAddress: "AA:AA:AA:AA:AA:01",
+            destinationMACAddress: "AA:AA:AA:AA:AA:02",
+            payload: .arp(TopologyARPPacket(
+                operation: .request,
+                senderMACAddress: "AA:AA:AA:AA:AA:01",
+                senderIPAddress: "10.0.0.1",
+                targetMACAddress: TopologyNetworkRuntimeEngine.unspecifiedMACAddress,
+                targetIPAddress: "10.0.0.2"
+            ))
+        ))
+        var observedResult: TopologyRemoteLinkLANSendResult?
+
+        controller.send(frame, from: nodeID) { result in
+            observedResult = result
+            completion.fulfill()
+        }
+        controller.stopAll()
+        await fulfillment(of: [completion], timeout: 1.0)
+
+        XCTAssertEqual(observedResult, .failed(.sessionStopped))
+    }
+
+    func testLANRemoteLinkSendFailureIsObservableAndNotRetriedByRuntime() {
+        var fixture = lanRemoteLinkOutboundFixture()
+        fixture.engine.sendEthernetFrame(
+            fromNodeID: fixture.hostID,
+            outgoingPortID: fixture.hostPortID,
+            frame: fixture.frame
+        )
+        _ = fixture.engine.handle(.advance(toMilliseconds: 5_000))
+        let firstClaim = fixture.engine.claimLANRemoteLinkOutboundFrames(limit: 1)
+        XCTAssertEqual(firstClaim.count, 1)
+        XCTAssertTrue(fixture.engine.claimLANRemoteLinkOutboundFrames(limit: 1).isEmpty)
+
+        guard let transmissionID = firstClaim.first?.transmissionID else {
+            return XCTFail("Expected a claimed LAN transmission")
+        }
+        fixture.engine.completeLANRemoteLinkOutboundFrame(
+            nodeID: fixture.remoteID,
+            transmissionID: transmissionID,
+            result: .failed(.transportFailed(message: "connection reset", attempts: 1))
+        )
+
+        XCTAssertEqual(fixture.engine.remoteLinkRuntimeStatus(nodeID: fixture.remoteID)?.pendingFrameCount, 0)
+        XCTAssertTrue(fixture.engine.claimLANRemoteLinkOutboundFrames().isEmpty)
+        XCTAssertTrue(fixture.engine.remoteLinkRuntimeEvidence.contains { evidence in
+            evidence.frameIdentity == fixture.frame.identity
+                && evidence.kind == .dropped(reason: .lanDeliveryFailed)
+        })
+        XCTAssertTrue(fixture.engine.state.packetTraces.contains { trace in
+            trace.frameIdentity == fixture.frame.identity
+                && trace.operation == .dropped
+                && trace.detail?.contains("connection reset") == true
+        })
+    }
+
+    func testLANRemoteLinkClaimIsBoundedAndDoesNotDuplicateAwaitingFrames() {
+        var fixture = lanRemoteLinkOutboundFixture()
+        let secondFrame = TopologyEthernetFrame(
+            identity: fixture.engine.allocateFrameIdentity(),
+            sourceMACAddress: fixture.frame.sourceMACAddress,
+            destinationMACAddress: fixture.frame.destinationMACAddress,
+            payload: fixture.frame.payload
+        )
+        fixture.engine.sendEthernetFrame(
+            fromNodeID: fixture.hostID,
+            outgoingPortID: fixture.hostPortID,
+            frame: fixture.frame
+        )
+        fixture.engine.sendEthernetFrame(
+            fromNodeID: fixture.hostID,
+            outgoingPortID: fixture.hostPortID,
+            frame: secondFrame
+        )
+        _ = fixture.engine.handle(.advance(toMilliseconds: 5_000))
+
+        let firstClaim = fixture.engine.claimLANRemoteLinkOutboundFrames(limit: 1)
+        let secondClaim = fixture.engine.claimLANRemoteLinkOutboundFrames(limit: 1)
+        let exhaustedClaim = fixture.engine.claimLANRemoteLinkOutboundFrames(limit: 1)
+
+        XCTAssertEqual(firstClaim.count, 1)
+        XCTAssertEqual(secondClaim.count, 1)
+        XCTAssertNotEqual(firstClaim.first?.transmissionID, secondClaim.first?.transmissionID)
+        XCTAssertTrue(exhaustedClaim.isEmpty)
+        XCTAssertEqual(fixture.engine.remoteLinkRuntimeStatus(nodeID: fixture.remoteID)?.pendingFrameCount, 2)
+    }
+
+    func testLANRemoteLinkTransmissionIdentifiersAreNotReusedAcrossSimulationRuns() throws {
+        var fixture = lanRemoteLinkOutboundFixture()
+        fixture.engine.sendEthernetFrame(
+            fromNodeID: fixture.hostID,
+            outgoingPortID: fixture.hostPortID,
+            frame: fixture.frame
+        )
+        _ = fixture.engine.handle(.advance(toMilliseconds: 5_000))
+        let firstTransmissionID = try XCTUnwrap(
+            fixture.engine.claimLANRemoteLinkOutboundFrames(limit: 1).first?.transmissionID
+        )
+
+        let snapshot = fixture.engine.state.topologySnapshot
+        _ = fixture.engine.handle(.stop)
+        _ = fixture.engine.handle(.start(snapshot: snapshot, seed: 99, initialTimeMilliseconds: 0))
+        fixture.engine.setLANRemoteLinkConnectionState(
+            nodeID: fixture.remoteID,
+            connectionState: .connected(peerName: "Peer iPad")
+        )
+        let secondFrame = TopologyEthernetFrame(
+            identity: fixture.engine.allocateFrameIdentity(),
+            sourceMACAddress: fixture.frame.sourceMACAddress,
+            destinationMACAddress: fixture.frame.destinationMACAddress,
+            payload: fixture.frame.payload
+        )
+        fixture.engine.sendEthernetFrame(
+            fromNodeID: fixture.hostID,
+            outgoingPortID: fixture.hostPortID,
+            frame: secondFrame
+        )
+        _ = fixture.engine.handle(.advance(toMilliseconds: 5_000))
+        let secondTransmissionID = try XCTUnwrap(
+            fixture.engine.claimLANRemoteLinkOutboundFrames(limit: 1).first?.transmissionID
+        )
+
+        XCTAssertGreaterThan(secondTransmissionID, firstTransmissionID)
+        fixture.engine.completeLANRemoteLinkOutboundFrame(
+            nodeID: fixture.remoteID,
+            transmissionID: firstTransmissionID,
+            result: .accepted(attempts: 1)
+        )
+        XCTAssertEqual(fixture.engine.remoteLinkRuntimeStatus(nodeID: fixture.remoteID)?.pendingFrameCount, 1)
+    }
+
+    func testLANRemoteLinkPendingScheduleIsBoundedBeforeControllerQueueing() {
+        var fixture = lanRemoteLinkOutboundFixture()
+        for _ in 0...TopologyNetworkRuntimeEngine.maximumPendingLANRemoteLinkTransmissionsPerNode {
+            let frame = TopologyEthernetFrame(
+                identity: fixture.engine.allocateFrameIdentity(),
+                sourceMACAddress: fixture.frame.sourceMACAddress,
+                destinationMACAddress: fixture.frame.destinationMACAddress,
+                payload: fixture.frame.payload
+            )
+            fixture.engine.sendEthernetFrame(
+                fromNodeID: fixture.hostID,
+                outgoingPortID: fixture.hostPortID,
+                frame: frame
+            )
+        }
+
+        let scheduledCount = fixture.engine.state.pendingEvents.filter { event in
+            guard case let .lanRemoteLinkTransmission(nodeID, _, _, _) = event.kind else { return false }
+            return nodeID == fixture.remoteID
+        }.count
+        let queuedCount = fixture.engine.state.lanRemoteLinkOutboundFrames.filter {
+            $0.nodeID == fixture.remoteID
+        }.count
+        XCTAssertEqual(
+            scheduledCount + queuedCount,
+            TopologyNetworkRuntimeEngine.maximumPendingLANRemoteLinkTransmissionsPerNode
+        )
+        XCTAssertTrue(fixture.engine.remoteLinkRuntimeEvidence.contains { evidence in
+            evidence.nodeID == fixture.remoteID
+                && evidence.kind == .dropped(reason: .lanOutboundQueueOverflow)
+        })
+    }
+
+    func testGlobalPacketLossDropsEveryPhysicalDeliveryUntilDisabled() {
+        let firstNodeID = uuid("00000000-0000-0000-0000-000000000101")
+        let firstPortID = uuid("00000000-0000-0000-0000-000000000102")
+        let secondNodeID = uuid("00000000-0000-0000-0000-000000000103")
+        let secondPortID = uuid("00000000-0000-0000-0000-000000000104")
+        var engine = startedEngine(
+            nodes: [pc(firstNodeID, firstPortID), pc(secondNodeID, secondPortID)],
+            links: [link(firstNodeID, firstPortID, secondNodeID, secondPortID)],
+            devices: [
+                firstNodeID: device("10.0.0.1"),
+                secondNodeID: device("10.0.0.2"),
+            ]
+        )
+        let frame = TopologyEthernetFrame(
+            identity: engine.allocateFrameIdentity(),
+            sourceMACAddress: TopologyNetworkRuntimeEngine.stableMACAddress(for: firstPortID),
+            destinationMACAddress: TopologyNetworkRuntimeEngine.ethernetBroadcastMACAddress,
+            payload: .arp(TopologyARPPacket(
+                operation: .request,
+                senderMACAddress: TopologyNetworkRuntimeEngine.stableMACAddress(for: firstPortID),
+                senderIPAddress: "10.0.0.1",
+                targetMACAddress: TopologyNetworkRuntimeEngine.unspecifiedMACAddress,
+                targetIPAddress: "10.0.0.2"
+            ))
+        )
+
+        engine.setGlobalPacketLossEnabled(true)
+        engine.sendEthernetFrame(fromNodeID: firstNodeID, outgoingPortID: firstPortID, frame: frame)
+
+        XCTAssertTrue(engine.state.globalPacketLossEnabled)
+        XCTAssertTrue(engine.state.arpCachesByNodeID[secondNodeID]?.isEmpty ?? true)
+        XCTAssertTrue(engine.state.packetTraces.contains { trace in
+            trace.frameIdentity == frame.identity
+                && trace.nodeID == secondNodeID
+                && trace.operation == .dropped
+                && trace.detail == "global packet-loss simulation"
+        })
+
+        engine.setGlobalPacketLossEnabled(false)
+        engine.sendEthernetFrame(fromNodeID: firstNodeID, outgoingPortID: firstPortID, frame: frame)
+
+        XCTAssertFalse(engine.state.globalPacketLossEnabled)
+        XCTAssertEqual(
+            engine.state.arpCachesByNodeID[secondNodeID]?["10.0.0.1"]?.macAddress,
+            TopologyNetworkRuntimeEngine.stableMACAddress(for: firstPortID)
+        )
+    }
+
+    func testTypedDNSConsultationRequiresReachableRunningServer() {
+        let clientNodeID = uuid("00000000-0000-0000-0000-00000000D101")
+        let clientPortID = uuid("00000000-0000-0000-0000-00000000D102")
+        let serverNodeID = uuid("00000000-0000-0000-0000-00000000D103")
+        let serverPortID = uuid("00000000-0000-0000-0000-00000000D104")
+        let nodes = [pc(clientNodeID, clientPortID), pc(serverNodeID, serverPortID)]
+        let devices = [
+            clientNodeID: device("10.0.0.10"),
+            serverNodeID: device("10.0.0.53"),
+        ]
+        guard let question = TopologyDNSQuestion(name: "school.local", type: .mailExchange) else {
+            return XCTFail("Expected valid DNS question")
+        }
+
+        var disconnected = startedEngine(nodes: nodes, links: [], devices: devices)
+        XCTAssertNotNil(disconnected.startDNSServer(nodeID: serverNodeID))
+        XCTAssertFalse(disconnected.consultDNSServer(
+            clientNodeID: clientNodeID,
+            serverIPAddress: "10.0.0.53",
+            question: question,
+            timeoutMilliseconds: 1
+        ))
+
+        var stopped = startedEngine(
+            nodes: nodes,
+            links: [link(clientNodeID, clientPortID, serverNodeID, serverPortID)],
+            devices: devices
+        )
+        XCTAssertFalse(stopped.consultDNSServer(
+            clientNodeID: clientNodeID,
+            serverIPAddress: "10.0.0.53",
+            question: question,
+            timeoutMilliseconds: 1
+        ))
+
+        var connected = startedEngine(
+            nodes: nodes,
+            links: [link(clientNodeID, clientPortID, serverNodeID, serverPortID)],
+            devices: devices
+        )
+        XCTAssertNotNil(connected.startDNSServer(nodeID: serverNodeID))
+        XCTAssertTrue(connected.consultDNSServer(
+            clientNodeID: clientNodeID,
+            serverIPAddress: "10.0.0.53",
+            question: question,
+            timeoutMilliseconds: 1
+        ))
+        XCTAssertTrue(connected.state.packetTraces.contains { trace in
+            trace.nodeID == clientNodeID
+                && trace.operation == .accepted
+                && trace.detail == "DNS response typed received"
+                && trace.beforeHeaders.contains {
+                    $0.name == "recordType" && $0.value == TopologyDNSRecordType.mailExchange.rawValue
+                }
+        })
+    }
+
+    func testTypedDNSConsultationHonorsGlobalPacketLoss() {
+        let clientNodeID = uuid("00000000-0000-0000-0000-00000000D201")
+        let clientPortID = uuid("00000000-0000-0000-0000-00000000D202")
+        let serverNodeID = uuid("00000000-0000-0000-0000-00000000D203")
+        let serverPortID = uuid("00000000-0000-0000-0000-00000000D204")
+        var engine = startedEngine(
+            nodes: [pc(clientNodeID, clientPortID), pc(serverNodeID, serverPortID)],
+            links: [link(clientNodeID, clientPortID, serverNodeID, serverPortID)],
+            devices: [
+                clientNodeID: device("10.0.0.10"),
+                serverNodeID: device("10.0.0.53"),
+            ]
+        )
+        guard let question = TopologyDNSQuestion(name: "school.local", type: .nameServer) else {
+            return XCTFail("Expected valid DNS question")
+        }
+        XCTAssertNotNil(engine.startDNSServer(nodeID: serverNodeID))
+        engine.setGlobalPacketLossEnabled(true)
+
+        XCTAssertFalse(engine.consultDNSServer(
+            clientNodeID: clientNodeID,
+            serverIPAddress: "10.0.0.53",
+            question: question,
+            timeoutMilliseconds: 1
+        ))
+        XCTAssertTrue(engine.state.packetTraces.contains { trace in
+            trace.operation == .dropped && trace.detail == "global packet-loss simulation"
+        })
+    }
+
+    func testGlobalPacketLossResetsAcrossStopAndRestart() {
+        var engine = TopologyNetworkRuntimeEngine(seed: 42)
+        engine.handle(.start(snapshot: .empty, seed: 42, initialTimeMilliseconds: 0))
+        engine.setGlobalPacketLossEnabled(true)
+        XCTAssertTrue(engine.state.globalPacketLossEnabled)
+
+        engine.handle(.stop)
+        XCTAssertFalse(engine.state.globalPacketLossEnabled)
+
+        engine.handle(.start(snapshot: .empty, seed: 42, initialTimeMilliseconds: 0))
+        XCTAssertFalse(engine.state.globalPacketLossEnabled)
+    }
+
     func testStableEventQueueOrdersByDeadlineThenInsertionSequence() {
         var engine = TopologyNetworkRuntimeEngine(seed: 42)
         engine.handle(
@@ -1173,6 +2286,35 @@ final class TopologyNetworkRuntimeEngineTests: XCTestCase {
         XCTAssertTrue(engine.evaluateFirewall(packet: response, atNodeID: fixture.routerID).accepted)
     }
 
+    func testPacketTraceRetentionEvictsOldestEventsInConfiguredBatches() {
+        let nodeID = UUID(uuidString: "00000000-0000-0000-0000-000000002001")!
+        let interfaceID = UUID(uuidString: "00000000-0000-0000-0000-000000002002")!
+        var engine = TopologyNetworkRuntimeEngine(
+            seed: 20,
+            packetTraceRetentionPolicy: TopologyPacketTraceRetentionPolicy(
+                maximumEventCount: 3,
+                evictionBatchSize: 2
+            )
+        )
+
+        for identity in UInt64(1)...UInt64(6) {
+            engine.recordTrace(
+                frameIdentity: identity,
+                nodeID: nodeID,
+                interfaceID: interfaceID,
+                direction: .outbound,
+                layer: .dataLink,
+                operation: .sent,
+                detail: "trace-\(identity)"
+            )
+        }
+
+        XCTAssertEqual(engine.state.packetTraces.map(\.id), [5, 6])
+        XCTAssertEqual(engine.state.packetTraces.map(\.detail), ["trace-5", "trace-6"])
+        XCTAssertEqual(engine.state.discardedPacketTraceCount, 4)
+        XCTAssertEqual(engine.state.nextTraceIdentity, 7)
+    }
+
     func testPacketViewerGroupsForwardingClonesAndPreservesRepeatedLayerPathSteps() throws {
         let routerID = UUID(uuidString: "00000000-0000-0000-0000-000000002101")!
         let gatewayID = UUID(uuidString: "00000000-0000-0000-0000-000000002102")!
@@ -1287,6 +2429,23 @@ final class TopologyNetworkRuntimeEngineTests: XCTestCase {
         var engine = TopologyNetworkRuntimeEngine(seed: 22)
         engine.handle(.start(snapshot: snapshot, seed: 22, initialTimeMilliseconds: 0))
         engine.recordTrace(
+            nodeID: routerID,
+            interfaceID: secondPortID,
+            direction: .outbound,
+            layer: .application,
+            operation: .sent,
+            detail: "identity-free diagnostic"
+        )
+        engine.recordTrace(
+            frameIdentity: 99,
+            nodeID: routerID,
+            interfaceID: secondPortID,
+            direction: .outbound,
+            layer: .application,
+            operation: .compatibilityAdapter,
+            detail: "compatibility diagnostic"
+        )
+        engine.recordTrace(
             frameIdentity: 1,
             packetIdentity: 2,
             nodeID: routerID,
@@ -1308,8 +2467,8 @@ final class TopologyNetworkRuntimeEngineTests: XCTestCase {
         XCTAssertEqual(tabs[0].title, "Vermittlungsrechner - 10.2.0.1")
         XCTAssertEqual(tabs[0].eventCount, 1)
 
-        let rows = engine.packetMessageRows(nodeID: routerID, interfaceID: secondPortID)
-        XCTAssertEqual(rows.map(\.number), [1])
+        let rows = engine.packetCaptureMessageRows(nodeID: routerID)
+        XCTAssertEqual(rows.map(\.number), [3])
         XCTAssertEqual(rows[0].source, "10.2.0.1")
         XCTAssertEqual(rows[0].destination, "10.2.0.9")
         XCTAssertEqual(rows[0].protocolName, "UDP")
@@ -1840,6 +2999,151 @@ final class TopologyNetworkRuntimeEngineTests: XCTestCase {
         gateway: String = ""
     ) -> TopologyRuntimeDeviceConfiguration {
         TopologyRuntimeDeviceConfiguration(ipAddress: ipAddress, subnetMask: mask, defaultGateway: gateway)
+    }
+
+    private func lanRemoteLinkOutboundFixture() -> (
+        engine: TopologyNetworkRuntimeEngine,
+        hostID: UUID,
+        hostPortID: UUID,
+        remoteID: UUID,
+        frame: TopologyEthernetFrame
+    ) {
+        let hostID = uuid("00000000-0000-0000-0000-00000000AB01")
+        let hostPortID = uuid("00000000-0000-0000-0000-00000000AB02")
+        let remoteID = uuid("00000000-0000-0000-0000-00000000AB03")
+        let remotePortID = uuid("00000000-0000-0000-0000-00000000AB04")
+        let snapshot = TopologyNetworkRuntimeTopologySnapshot(
+            nodes: [
+                pc(hostID, hostPortID),
+                TopologyNetworkRuntimeNodeSnapshot(
+                    id: remoteID,
+                    kind: .remoteLink,
+                    ports: [TopologyNetworkRuntimePortSnapshot(id: remotePortID, label: "remote0")]
+                ),
+            ],
+            links: [link(hostID, hostPortID, remoteID, remotePortID)],
+            deviceConfigurations: [hostID: device("10.0.0.1")],
+            interfaceConfigurations: [:],
+            manualRoutesByNodeID: [:],
+            remoteLinkConfigurationsByNodeID: [remoteID: TopologyRemoteLinkConfiguration(
+                pairIdentifier: "shared-production-link-code",
+                latencyMilliseconds: 20,
+                transportMode: .localNetwork,
+                lanRole: .host
+            )]
+        )
+        var engine = TopologyNetworkRuntimeEngine(seed: 99)
+        engine.handle(.start(snapshot: snapshot, seed: 99, initialTimeMilliseconds: 0))
+        engine.setLANRemoteLinkConnectionState(nodeID: remoteID, connectionState: .connected(peerName: "Peer iPad"))
+        let frame = TopologyEthernetFrame(
+            identity: engine.allocateFrameIdentity(),
+            sourceMACAddress: TopologyNetworkRuntimeEngine.stableMACAddress(for: hostPortID),
+            destinationMACAddress: TopologyNetworkRuntimeEngine.ethernetBroadcastMACAddress,
+            payload: .arp(TopologyARPPacket(
+                operation: .request,
+                senderMACAddress: TopologyNetworkRuntimeEngine.stableMACAddress(for: hostPortID),
+                senderIPAddress: "10.0.0.1",
+                targetMACAddress: TopologyNetworkRuntimeEngine.unspecifiedMACAddress,
+                targetIPAddress: "10.0.0.2"
+            ))
+        )
+        return (engine, hostID, hostPortID, remoteID, frame)
+    }
+
+    private func sendRemoteLinkRecord(_ record: Data, over connection: NWConnection) async throws {
+        var length = UInt32(record.count).bigEndian
+        var framed = withUnsafeBytes(of: &length) { Data($0) }
+        framed.append(record)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            connection.send(content: framed, completion: .contentProcessed { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            })
+        }
+    }
+
+    private func receiveRemoteLinkRecord(over connection: NWConnection) async throws -> Data {
+        let header = try await receiveRemoteLinkBytes(count: 4, over: connection)
+        let length = header.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+        guard length > 0, length <= UInt32(TopologyRemoteLinkWireCodec.maximumRecordBytes) else {
+            throw TopologyRemoteLinkWireCodecError.recordTooLarge
+        }
+        return try await receiveRemoteLinkBytes(count: Int(length), over: connection)
+    }
+
+    private func receiveRemoteLinkBytes(count: Int, over connection: NWConnection) async throws -> Data {
+        var received = Data()
+        while received.count < count {
+            let remaining = count - received.count
+            let chunk = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                connection.receive(minimumIncompleteLength: 1, maximumLength: remaining) { data, _, isComplete, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if let data, !data.isEmpty {
+                        continuation.resume(returning: data)
+                    } else if isComplete {
+                        continuation.resume(throwing: POSIXError(.ECONNRESET))
+                    } else {
+                        continuation.resume(throwing: POSIXError(.EIO))
+                    }
+                }
+            }
+            received.append(chunk)
+        }
+        return received
+    }
+
+    private func availableLoopbackPort() throws -> UInt16 {
+        let socketDescriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard socketDescriptor >= 0 else { throw POSIXError(.ENFILE) }
+        defer { Darwin.close(socketDescriptor) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(0).bigEndian
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let bindResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(socketDescriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bindResult == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EADDRINUSE) }
+        var boundAddress = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nameResult = withUnsafeMutablePointer(to: &boundAddress) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.getsockname(socketDescriptor, $0, &length)
+            }
+        }
+        guard nameResult == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EINVAL) }
+        return UInt16(bigEndian: boundAddress.sin_port)
+    }
+
+    private func lanRemoteLinkHandshakes(
+        linkCode: String
+    ) -> (TopologyRemoteLinkWireHandshake, TopologyRemoteLinkWireHandshake) {
+        let digest = TopologyRemoteLinkWireCodec.digest(for: linkCode)
+        return (
+            TopologyRemoteLinkWireHandshake(
+                protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion,
+                linkDigest: digest,
+                endpointID: uuid("00000000-0000-0000-0000-00000000E101"),
+                endpointName: "Sender iPad",
+                sessionID: uuid("00000000-0000-0000-0000-00000000E102"),
+                challenge: Data(repeating: 0x71, count: TopologyRemoteLinkWireHandshake.challengeByteCount)
+            ),
+            TopologyRemoteLinkWireHandshake(
+                protocolVersion: TopologyRemoteLinkWireCodec.protocolVersion,
+                linkDigest: digest,
+                endpointID: uuid("00000000-0000-0000-0000-00000000E201"),
+                endpointName: "Receiver iPad",
+                sessionID: uuid("00000000-0000-0000-0000-00000000E202"),
+                challenge: Data(repeating: 0x72, count: TopologyRemoteLinkWireHandshake.challengeByteCount)
+            )
+        )
     }
 
     private func uuid(_ value: String) -> UUID {

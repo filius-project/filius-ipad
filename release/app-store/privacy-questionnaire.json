@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
   "releaseBinaryReviewed": false,
-  "dataCollectionDecision": "NO_DATA_TRANSMITTED_OFF_DEVICE_IN_SOURCE_REVIEW",
-  "trackingDecision": "NO_TRACKING_IN_SOURCE_REVIEW",
+  "dataCollectionDecision": "REVIEW_REQUIRED",
+  "trackingDecision": "REVIEW_REQUIRED",
   "privacyPolicyApproved": false,
-  "privacyManifestStatus": "PRESENT_USERDEFAULTS_CA92.1_PENDING_ARCHIVE_REVIEW",
-  "requiredReasonAPIReview": "USERDEFAULTS_ONLY_CA92.1_PENDING_ARCHIVE_REVIEW",
-  "thirdPartySDKInventory": "NO_THIRD_PARTY_SDK_DEPENDENCIES_IN_XCODE_PROJECT; VERIFY_RELEASE_ARCHIVE",
+  "privacyManifestStatus": "REVIEW_REQUIRED",
+  "requiredReasonAPIReview": "REVIEW_REQUIRED",
+  "thirdPartySDKInventory": "TODO_ARCHIVE_BASED_INVENTORY",
   "dataCategories": [],
-  "retentionAndDeletionOwner": "Sören Schröder",
+  "retentionAndDeletionOwner": "TODO_ASSIGN_PRIVACY_OWNER",
   "approval": {
-    "owner": "Sören Schröder",
+    "owner": "TODO_ASSIGN_PRIVACY_OWNER",
     "date": "TODO_YYYY_MM_DD",
     "evidence": "TODO_LINK_PRIVATE_APPROVAL_RECORD"
   }

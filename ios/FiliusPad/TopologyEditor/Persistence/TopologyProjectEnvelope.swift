@@ -7,7 +7,7 @@ enum TopologyProjectSaveReason: String, Codable, Equatable {
 
 struct TopologyProjectEnvelope: Codable, Equatable {
     static let formatIdentifier = "com.filius.pad.project"
-    static let currentSchemaVersion = 9
+    static let currentSchemaVersion = 14
 
     let format: String
     let schemaVersion: Int

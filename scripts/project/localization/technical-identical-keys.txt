@@ -97,3 +97,5 @@ email.logs.entry
 gnutella.title
 runtime.app.gnutella
 runtime.cmd.windowTitle
+product.legal.gplV2
+product.legal.gplV3

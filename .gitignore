@@ -32,3 +32,8 @@ tmp/
 # Xcode per-user state
 xcuserdata/
 *.xcuserstate
+
+# Private legal evidence and generation tooling
+/docs/legal/*.pdf
+/docs/legal/private/
+/scripts/legal/

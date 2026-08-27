@@ -175,7 +175,7 @@ struct TopologyCanvasView: View {
             )
             .frame(width: iconSize.width, height: iconSize.height)
 
-            Text(node.displayName)
+            Text(state.displayLabel(for: node))
                 .font(.system(size: 11))
                 .foregroundStyle(Color.black)
                 .lineLimit(1)
@@ -198,7 +198,7 @@ struct TopologyCanvasView: View {
         // rather than the image-plus-caption stack, remains centered on the node.
         .position(x: screenPosition.x, y: screenPosition.y + (javaLabelHeight / 2))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(FiliusLocalization.t("canvas.node", node.displayName, accessibilityNodeLabel(for: node.kind)))
+        .accessibilityLabel(FiliusLocalization.t("canvas.node", state.displayLabel(for: node), accessibilityNodeLabel(for: node.kind)))
         .accessibilityHint(state.simulationPhase == .running ? FiliusLocalization.t("ui.a8000a8ff0b8") : FiliusLocalization.t("ui.7b0cc03c8d1d"))
         .accessibilityValue(state.remoteLinkVisualState(for: node.id)?.localizedDescription ?? "")
         .accessibilityAddTraits(state.simulationPhase == .running ? .isButton : [])
@@ -431,7 +431,6 @@ private struct TopologyCanvasNodeIcon: View {
     var body: some View {
         if kind == .remoteLink {
             RemoteLinkSymbolView(status: remoteLinkStatus)
-                .padding(4)
         } else if let image = TopologyParityAssetLoader.load(relativePath: iconRelativePath(for: kind)) {
             Image(uiImage: image)
                 .resizable()

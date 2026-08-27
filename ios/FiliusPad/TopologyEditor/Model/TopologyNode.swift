@@ -15,15 +15,54 @@ enum TopologyNodeKind: String, CaseIterable {
     }
 }
 
+
+enum TopologyHostLabelPolicy: String, Codable, CaseIterable, Equatable {
+    case manual
+    case ipAddress
+    case macAddress
+    case ipAndMAC
+}
+
 struct TopologyPortMetadata: Identifiable, Equatable {
     let id: UUID
     var label: String
     var isOccupied: Bool
+    private(set) var importedMACAddress: String?
 
-    init(id: UUID = UUID(), label: String, isOccupied: Bool = false) {
+    init(
+        id: UUID = UUID(),
+        label: String,
+        isOccupied: Bool = false,
+        importedMACAddress: String? = nil
+    ) {
         self.id = id
         self.label = label
         self.isOccupied = isOccupied
+        self.importedMACAddress = Self.canonicalMACAddress(importedMACAddress)
+    }
+
+    var effectiveMACAddress: String {
+        importedMACAddress ?? Self.stableGeneratedMACAddress(for: id)
+    }
+
+    static func stableGeneratedMACAddress(for portID: UUID) -> String {
+        let compact = portID.uuidString.replacingOccurrences(of: "-", with: "")
+        let suffix = Array(compact.suffix(10))
+        var octets = ["02"]
+        for offset in stride(from: 0, to: suffix.count, by: 2) {
+            octets.append(String(suffix[offset...min(offset + 1, suffix.count - 1)]).uppercased())
+        }
+        return octets.joined(separator: ":")
+    }
+
+    static func canonicalMACAddress(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        let segments = value.split(separator: ":", omittingEmptySubsequences: false)
+        guard segments.count == 6,
+              segments.allSatisfy({ segment in
+                  segment.count == 2 && segment.allSatisfy(\.isHexDigit)
+              }) else { return nil }
+        return segments.map { $0.uppercased() }.joined(separator: ":")
     }
 }
 
@@ -31,6 +70,7 @@ struct TopologyNode: Identifiable, Equatable {
     let id: UUID
     var kind: TopologyNodeKind
     var displayName: String
+    var hostLabelPolicy: TopologyHostLabelPolicy
     var position: CGPoint
     var ports: [TopologyPortMetadata]
 
@@ -38,6 +78,7 @@ struct TopologyNode: Identifiable, Equatable {
         id: UUID,
         kind: TopologyNodeKind,
         displayName: String? = nil,
+        hostLabelPolicy: TopologyHostLabelPolicy = .manual,
         position: CGPoint,
         ports: [TopologyPortMetadata]? = nil
     ) {
@@ -46,6 +87,7 @@ struct TopologyNode: Identifiable, Equatable {
         let normalizedDisplayName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.displayName = normalizedDisplayName.flatMap { $0.isEmpty ? nil : $0 }
             ?? TopologyNode.defaultDisplayName(for: kind)
+        self.hostLabelPolicy = kind.isPCClassEndpoint ? hostLabelPolicy : .manual
         self.position = position
         self.ports = ports ?? TopologyNode.defaultPorts(for: kind)
     }

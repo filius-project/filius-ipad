@@ -57,6 +57,21 @@ extension TopologyEditorState {
             return nil
         }
         guard configuration.isEnabled else { return .disabled }
+        if configuration.transportMode == .localNetwork {
+            guard simulationPhase == .running,
+                  let condition = networkRuntime.remoteLinkRuntimeStatus(nodeID: nodeID)?.condition
+            else { return .unpaired }
+            switch condition {
+            case .activeLAN:
+                return .active
+            case .connectionFailed:
+                return .ambiguous
+            case .disabled:
+                return .disabled
+            default:
+                return .unpaired
+            }
+        }
         let matchingPeerCount = graph.nodes.filter { node in
             node.id != nodeID
                 && node.kind == .remoteLink
@@ -72,23 +87,17 @@ extension TopologyEditorState {
 }
 
 struct RemoteLinkSymbolView: View {
+    static let parityArtworkRelativePath = "hardware/modem.png"
+
     var status: RemoteLinkVisualState?
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color.indigo.opacity(0.95), Color.cyan.opacity(0.82)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-            HStack(spacing: 5) {
-                Circle().fill(.white).frame(width: 13, height: 13)
-                Capsule().fill(.white.opacity(0.9)).frame(width: 26, height: 6)
-                Circle().fill(.white).frame(width: 13, height: 13)
-            }
+            TopologyParityImageView(
+                relativePath: Self.parityArtworkRelativePath,
+                fallbackSystemImage: "point.3.connected.trianglepath.dotted",
+                contentMode: .fit
+            )
             if let status {
                 Image(systemName: status.systemImage)
                     .font(.system(size: 9, weight: .black))
@@ -99,7 +108,6 @@ struct RemoteLinkSymbolView: View {
                     .offset(x: 27, y: 18)
             }
         }
-        .shadow(color: Color.black.opacity(0.22), radius: 2, y: 1)
     }
 }
 
@@ -107,11 +115,13 @@ struct TopologyMainMenuView: View {
     let simulationPhase: TopologySimulationPhase
     let workspaceMode: TopologyWorkspaceMode
     let simulationSpeed: TopologySimulationSpeed
+    let globalPacketLossEnabled: Bool
     let isPersistenceBusy: Bool
     let canUndo: Bool
     let canRedo: Bool
     let showsProtocolApplicationBuilder: Bool
     let onSimulationSpeedChanged: (Int) -> Void
+    let onGlobalPacketLossChanged: (Bool) -> Void
     let onNewProject: () -> Void
     let onOpenProject: () -> Void
     let onSaveProject: () -> Void
@@ -122,6 +132,7 @@ struct TopologyMainMenuView: View {
     let onStartSimulation: () -> Void
     let onStopSimulation: () -> Void
     let onShowProtocolApplicationBuilder: () -> Void
+    let onExportDetailedReport: () -> Void
     let onShowHelp: () -> Void
     let onShowInformation: () -> Void
     let onShowSettings: () -> Void
@@ -164,6 +175,7 @@ struct TopologyMainMenuView: View {
                 modeButton(FiliusLocalization.t("menu.documentation"), image: "allgemein/dokumodus.png", identifier: "java.mode.documentation", selected: simulationPhase == .stopped && workspaceMode == .documentation, enabled: simulationPhase == .stopped) { onEnterDocumentation() }
             }
             speedControl
+            packetLossControl
             Spacer(minLength: 0)
             toolbarGroup {
                 compactImageButton(FiliusLocalization.t("menu.help"), image: "allgemein/hilfe.png", identifier: "java.menu.help", action: onShowHelp)
@@ -194,6 +206,7 @@ struct TopologyMainMenuView: View {
                 compactModeButton(FiliusLocalization.t("menu.documentation"), image: "pencil", identifier: "java.mode.documentation", selected: simulationPhase == .stopped && workspaceMode == .documentation, enabled: simulationPhase == .stopped) { onEnterDocumentation() }
             }
             speedControl
+            compactPacketLossControl
             overflowMenu
         }
     }
@@ -217,6 +230,24 @@ struct TopologyMainMenuView: View {
         .background(FiliusExperienceTokens.toolbarSurface, in: RoundedRectangle(cornerRadius: FiliusExperienceTokens.groupCornerRadius))
     }
 
+    private var packetLossControl: some View {
+        TopologyPacketLossMomentaryControl(
+            isActive: globalPacketLossEnabled,
+            isEnabled: simulationPhase == .running,
+            compact: false,
+            onPressingChanged: onGlobalPacketLossChanged
+        )
+    }
+
+    private var compactPacketLossControl: some View {
+        TopologyPacketLossMomentaryControl(
+            isActive: globalPacketLossEnabled,
+            isEnabled: simulationPhase == .running,
+            compact: true,
+            onPressingChanged: onGlobalPacketLossChanged
+        )
+    }
+
     private var overflowMenu: some View {
         Menu {
             Button(FiliusLocalization.t("menu.undo"), action: onUndo)
@@ -231,6 +262,8 @@ struct TopologyMainMenuView: View {
             if showsProtocolApplicationBuilder {
                 Button(FiliusLocalization.t("menu.protocolBuilder"), action: onShowProtocolApplicationBuilder).disabled(!canEditProject)
             }
+            Button(FiliusLocalization.t("menu.exportDetailedReport"), action: onExportDetailedReport)
+                .accessibilityIdentifier("report.detailed.export")
             Button(FiliusLocalization.t("menu.settings"), action: onShowSettings)
         } label: { Image(systemName: "ellipsis.circle").font(.title2).frame(width: 44, height: 44) }
         .accessibilityLabel(FiliusLocalization.t("menu.more"))
@@ -282,6 +315,73 @@ struct TopologyMainMenuView: View {
     private func compactImageButton(_ title: String, image: String, identifier: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { TopologyParityImageView(relativePath: image, fallbackSystemImage: "questionmark", contentMode: .fit).frame(width: 32, height: 32).frame(width: 44, height: 44) }
             .buttonStyle(.plain).accessibilityLabel(title).accessibilityIdentifier(identifier)
+    }
+}
+
+
+private struct TopologyPacketLossMomentaryControl: View {
+    let isActive: Bool
+    let isEnabled: Bool
+    let compact: Bool
+    let onPressingChanged: (Bool) -> Void
+
+    var body: some View {
+        Button(action: {}) {
+            HStack(spacing: compact ? 0 : 6) {
+                Image(systemName: isActive ? "wifi.slash" : "wifi")
+                    .font(.body.weight(.semibold))
+                    .symbolEffect(.pulse, isActive: isActive)
+
+                if !compact {
+                    Text(FiliusLocalization.t("menu.packetLoss"))
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                }
+            }
+            .foregroundStyle(isActive ? Color.white : Color.primary)
+            .frame(minWidth: compact ? 44 : 96, minHeight: FiliusExperienceTokens.minimumHitSize)
+            .padding(.horizontal, compact ? 0 : 8)
+            .background(
+                isActive ? Color.red : FiliusExperienceTokens.toolbarSurface,
+                in: RoundedRectangle(cornerRadius: FiliusExperienceTokens.groupCornerRadius)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: FiliusExperienceTokens.groupCornerRadius)
+                    .stroke(isActive ? Color.red.opacity(0.9) : Color.clear, lineWidth: 2)
+            }
+        }
+        .buttonStyle(TopologyPacketLossMomentaryButtonStyle(
+            isEnabled: isEnabled,
+            onPressingChanged: onPressingChanged
+        ))
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.45)
+        .accessibilityLabel(FiliusLocalization.t("menu.packetLoss"))
+        .accessibilityValue(FiliusLocalization.t(isActive ? "menu.packetLoss.active" : "menu.packetLoss.inactive"))
+        .accessibilityHint(FiliusLocalization.t("menu.packetLoss.hint"))
+        .accessibilityIdentifier("simulation.packetLoss.control")
+        .onChange(of: isEnabled) { _, enabled in
+            if !enabled {
+                onPressingChanged(false)
+            }
+        }
+        .onDisappear {
+            onPressingChanged(false)
+        }
+    }
+}
+
+private struct TopologyPacketLossMomentaryButtonStyle: ButtonStyle {
+    let isEnabled: Bool
+    let onPressingChanged: (Bool) -> Void
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+            .onChange(of: configuration.isPressed) { _, pressed in
+                onPressingChanged(isEnabled && pressed)
+            }
     }
 }
 
@@ -375,7 +475,7 @@ struct TopologyPaletteView: View {
                         title: FiliusLocalization.t("palette.remoteLink"),
                         mode: .place(.remoteLink),
                         draggableNodeKind: .remoteLink,
-                        iconRelativePath: "hardware/modem.png",
+                        iconRelativePath: RemoteLinkSymbolView.parityArtworkRelativePath,
                         iconSize: CGSize(width: 80, height: 56),
                         fallbackSystemImage: "point.3.connected.trianglepath.dotted",
                         identifier: "palette.tool.place.remote-link"
@@ -491,7 +591,7 @@ struct TopologyPaletteView: View {
             Group {
                 if kind == .remoteLink {
                     TopologyParityImageView(
-                        relativePath: "hardware/modem.png",
+                        relativePath: RemoteLinkSymbolView.parityArtworkRelativePath,
                         fallbackSystemImage: image,
                         contentMode: .fit
                     )

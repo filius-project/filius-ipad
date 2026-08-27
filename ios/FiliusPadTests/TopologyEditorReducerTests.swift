@@ -111,6 +111,35 @@ final class TopologyEditorReducerTests: XCTestCase {
         XCTAssertFalse(source.contains("ownerName"))
     }
 
+    func testDNSRecursionEditorUsesExplicitSaveForCurrentToggleAndForwarderValues() throws {
+        let testFileURL = URL(fileURLWithPath: #filePath)
+        let deviceSheetURL = testFileURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("FiliusPad/TopologyEditor/View/TopologyRuntimeDeviceSheet.swift")
+        let source = try String(contentsOf: deviceSheetURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains(
+                "Toggle(FiliusLocalization.t(\"runtime.dns.recursive\"), isOn: $dnsRecursionEnabled)"
+            )
+        )
+        XCTAssertTrue(
+            source.contains(
+                "Button(FiliusLocalization.t(\"common.save\")) {\n"
+                    + "                onDNSSetRecursion(dnsRecursionEnabled, dnsForwarder)"
+            )
+        )
+        XCTAssertTrue(
+            source.contains(
+                ".accessibilityIdentifier(\"runtime.device.app.dns.recursion.save\")"
+            )
+        )
+        XCTAssertFalse(
+            source.contains("onDNSSetRecursion(enabled, dnsForwarder)")
+        )
+    }
+
     func testManualRouteSelectionUsesGreatestMaskAndPreservesFirstEqualMaskMatch() {
         let broad = TopologyRuntimeManualRoute(
             destinationNetwork: "10.0.0.0",
@@ -207,6 +236,7 @@ final class TopologyEditorReducerTests: XCTestCase {
             action: .saveDesignDeviceConfiguration(
                 nodeID: nodeID,
                 displayName: "Mobile Lab",
+                hostLabelPolicy: nil,
                 deviceConfiguration: configuration,
                 interfaceConfigurations: [],
                 switchConfiguration: nil,
@@ -219,6 +249,115 @@ final class TopologyEditorReducerTests: XCTestCase {
         XCTAssertEqual(state.graph.node(withID: nodeID)?.ports.map(\.label), ["eth0"])
         XCTAssertEqual(state.runtimeDeviceConfigurations[nodeID], configuration)
         XCTAssertNil(state.lastValidationError)
+    }
+
+    func testHostLabelPolicyDerivesIPMACAndFallsBackToManualName() throws {
+        var state = TopologyEditorState()
+        let nodeID = addNode(kind: .pc, at: CGPoint(x: 40, y: 60), to: &state)
+        let node = try XCTUnwrap(state.graph.node(withID: nodeID))
+        let expectedMAC = TopologyNetworkRuntimeEngine.stableMACAddress(for: try XCTUnwrap(node.ports.first?.id))
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveDesignDeviceConfiguration(
+                nodeID: nodeID,
+                displayName: "Lab Host",
+                hostLabelPolicy: .ipAndMAC,
+                deviceConfiguration: TopologyRuntimeDeviceConfiguration(
+                    ipAddress: "10.20.30.40",
+                    subnetMask: "255.255.255.0"
+                ),
+                interfaceConfigurations: [],
+                switchConfiguration: nil,
+                remoteLinkConfiguration: nil,
+                hostWirelessConfiguration: TopologyHostWirelessConfiguration()
+            )
+        )
+
+        let configured = try XCTUnwrap(state.graph.node(withID: nodeID))
+        XCTAssertEqual(configured.hostLabelPolicy, .ipAndMAC)
+        XCTAssertEqual(state.displayLabel(for: configured), "10.20.30.40 (\(expectedMAC))")
+
+        state.runtimeDeviceConfigurations[nodeID] = TopologyRuntimeDeviceConfiguration(
+            ipAddress: "invalid",
+            subnetMask: "255.255.255.0"
+        )
+        XCTAssertEqual(state.displayLabel(for: configured), expectedMAC)
+    }
+
+    func testIPDerivedHostLabelTracksActiveDHCPLeaseAndConfiguredFallback() throws {
+        var state = TopologyEditorState()
+        let serverNodeID = addNode(kind: .pc, at: CGPoint(x: 20, y: 20), to: &state)
+        let clientNodeID = addNode(kind: .pc, at: CGPoint(x: 220, y: 20), to: &state)
+        connect(serverNodeID, clientNodeID, state: &state)
+
+        let clientIndex = try XCTUnwrap(state.graph.nodeIndex(withID: clientNodeID))
+        state.graph.nodes[clientIndex].hostLabelPolicy = .ipAddress
+        state.runtimeDeviceConfigurations[serverNodeID] = TopologyRuntimeDeviceConfiguration(
+            ipAddress: "192.168.50.1",
+            subnetMask: "255.255.255.0"
+        )
+        let configuredClient = TopologyRuntimeDeviceConfiguration(
+            ipAddress: "169.254.1.2",
+            subnetMask: "255.255.0.0"
+        )
+        state.runtimeDeviceConfigurations[clientNodeID] = configuredClient
+        state.runtimeDHCPClientConfigurationsByNodeID[clientNodeID] = TopologyDHCPClientConfiguration(isEnabled: true)
+        state.runtimeDHCPServerConfigurationsByNodeID[serverNodeID] = TopologyDHCPServerConfiguration(
+            isActive: true,
+            lowerBoundIPAddress: "192.168.50.20",
+            upperBoundIPAddress: "192.168.50.29",
+            gatewayIPAddress: "192.168.50.1",
+            dnsServerIPAddress: "192.168.50.53",
+            useOwnSettings: true
+        )
+
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+        TopologyEditorReducer.reduce(state: &state, action: .simulationTick(step: 1_000))
+
+        let client = try XCTUnwrap(state.graph.node(withID: clientNodeID))
+        XCTAssertEqual(state.runtimeDeviceConfigurations[clientNodeID], configuredClient)
+        XCTAssertEqual(state.runtimeDHCPLeaseByNodeID[clientNodeID]?.ipAddress, "192.168.50.20")
+        XCTAssertEqual(state.displayLabel(for: client), "192.168.50.20")
+
+        TopologyEditorReducer.reduce(state: &state, action: .stopSimulation)
+
+        XCTAssertNil(state.runtimeDHCPLeaseByNodeID[clientNodeID])
+        XCTAssertEqual(state.displayLabel(for: client), "169.254.1.2")
+    }
+
+    func testImportedJavaMACOverridesGeneratedMACForHostLabelAndRuntimeInterface() throws {
+        let port = TopologyPortMetadata(
+            id: uuid("20202020-2020-2020-2020-202020202021"),
+            label: "eth0",
+            importedMACAddress: "aa:bb:cc:dd:ee:ff"
+        )
+        let node = TopologyNode(
+            id: uuid("20202020-2020-2020-2020-202020202020"),
+            kind: .pc,
+            displayName: "Imported Host",
+            hostLabelPolicy: .macAddress,
+            position: CGPoint(x: 40, y: 60),
+            ports: [port]
+        )
+        var state = TopologyEditorState()
+        state.graph = TopologyGraph(nodes: [node], links: [])
+        state.runtimeDeviceConfigurations[node.id] = TopologyRuntimeDeviceConfiguration(
+            ipAddress: "10.0.0.10",
+            subnetMask: "255.255.255.0"
+        )
+
+        XCTAssertEqual(state.displayLabel(for: node), "AA:BB:CC:DD:EE:FF")
+
+        var runtime = TopologyNetworkRuntimeEngine(seed: 7)
+        runtime.handle(
+            .start(
+                snapshot: TopologyNetworkRuntimeTopologySnapshot(editorState: state),
+                seed: 7,
+                initialTimeMilliseconds: 0
+            )
+        )
+        XCTAssertEqual(runtime.networkInterfaces(nodeID: node.id).first?.macAddress, "AA:BB:CC:DD:EE:FF")
     }
 
     func testDesignConfigurationRenamesPCAndUpdatesNextRuntimeSnapshotInputs() {
@@ -237,6 +376,7 @@ final class TopologyEditorReducerTests: XCTestCase {
             action: .saveDesignDeviceConfiguration(
                 nodeID: nodeID,
                 displayName: "  Labor-PC  ",
+                hostLabelPolicy: nil,
                 deviceConfiguration: configuration,
                 interfaceConfigurations: [],
                 switchConfiguration: nil,
@@ -252,6 +392,21 @@ final class TopologyEditorReducerTests: XCTestCase {
 
         let nextRuntime = TopologyNetworkRuntimeTopologySnapshot(editorState: state)
         XCTAssertEqual(nextRuntime.deviceConfigurations[nodeID], configuration)
+    }
+
+    func testGlobalPacketLossActionRequiresRunningSimulationAndResetsOnStop() {
+        var state = TopologyEditorState()
+
+        TopologyEditorReducer.reduce(state: &state, action: .setGlobalPacketLoss(enabled: true))
+        XCTAssertFalse(state.networkRuntime.state.globalPacketLossEnabled)
+
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+        TopologyEditorReducer.reduce(state: &state, action: .setGlobalPacketLoss(enabled: true))
+        XCTAssertTrue(state.networkRuntime.state.globalPacketLossEnabled)
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .globalPacketLossChanged)
+
+        TopologyEditorReducer.reduce(state: &state, action: .stopSimulation)
+        XCTAssertFalse(state.networkRuntime.state.globalPacketLossEnabled)
     }
 
     func testDesignConfigurationUpdatesRouterInterfacesAndRejectsWhileSimulationRuns() throws {
@@ -270,6 +425,7 @@ final class TopologyEditorReducerTests: XCTestCase {
             action: .saveDesignDeviceConfiguration(
                 nodeID: nodeID,
                 displayName: "Backbone",
+                hostLabelPolicy: nil,
                 deviceConfiguration: nil,
                 interfaceConfigurations: [interface],
                 switchConfiguration: nil,
@@ -292,6 +448,7 @@ final class TopologyEditorReducerTests: XCTestCase {
             action: .saveDesignDeviceConfiguration(
                 nodeID: nodeID,
                 displayName: "Should Not Apply",
+                hostLabelPolicy: nil,
                 deviceConfiguration: nil,
                 interfaceConfigurations: [interface],
                 switchConfiguration: nil,
@@ -313,6 +470,7 @@ final class TopologyEditorReducerTests: XCTestCase {
             action: .saveDesignDeviceConfiguration(
                 nodeID: nodeID,
                 displayName: "Verteiler 1",
+                hostLabelPolicy: nil,
                 deviceConfiguration: nil,
                 interfaceConfigurations: [],
                 switchConfiguration: TopologySwitchConfiguration(ssid: "Klassenraum", retentionTimeMilliseconds: 90_000),
@@ -330,6 +488,102 @@ final class TopologyEditorReducerTests: XCTestCase {
         XCTAssertNil(state.lastValidationError)
     }
 
+    func testNewRemoteLinksUseUniqueSixDigitShareCodes() throws {
+        var state = TopologyEditorState()
+        let firstNodeID = uuid("ABCD0000-0000-0000-0000-000000000001")
+        let secondNodeID = uuid("ABCD0000-0000-0000-0000-000000000002")
+
+        addNode(kind: .remoteLink, at: CGPoint(x: 40, y: 60), nodeID: firstNodeID, to: &state)
+        addNode(kind: .remoteLink, at: CGPoint(x: 120, y: 60), nodeID: secondNodeID, to: &state)
+
+        let firstCode = try XCTUnwrap(state.remoteLinkConfigurationsByNodeID[firstNodeID]?.pairIdentifier)
+        let secondCode = try XCTUnwrap(state.remoteLinkConfigurationsByNodeID[secondNodeID]?.pairIdentifier)
+
+        XCTAssertEqual(firstCode.count, 6)
+        XCTAssertTrue(firstCode.utf8.allSatisfy { $0 >= 48 && $0 <= 57 })
+        XCTAssertEqual(secondCode.count, 6)
+        XCTAssertTrue(secondCode.utf8.allSatisfy { $0 >= 48 && $0 <= 57 })
+        XCTAssertNotEqual(firstCode, secondCode)
+    }
+
+    func testDesignConfigurationPreservesLocalNetworkRemoteLinkSettings() throws {
+        var state = TopologyEditorState()
+        let nodeID = addNode(kind: .remoteLink, at: CGPoint(x: 40, y: 60), to: &state)
+        let configuration = TopologyRemoteLinkConfiguration(
+            pairIdentifier: "  classroom-link  ",
+            latencyMilliseconds: 125,
+            isEnabled: true,
+            transportMode: .localNetwork,
+            lanRole: .join,
+            lanPort: 12_345,
+            lanJoinMethod: .manual,
+            lanRemoteHost: "  192.168.1.44  ",
+            lanRemotePort: 23_456
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveDesignDeviceConfiguration(
+                nodeID: nodeID,
+                displayName: "Remote Classroom",
+                hostLabelPolicy: nil,
+                deviceConfiguration: nil,
+                interfaceConfigurations: [],
+                switchConfiguration: nil,
+                remoteLinkConfiguration: configuration,
+                hostWirelessConfiguration: nil
+            )
+        )
+
+        XCTAssertNil(state.lastValidationError)
+        XCTAssertEqual(state.graph.node(withID: nodeID)?.displayName, "Remote Classroom")
+        XCTAssertEqual(
+            try XCTUnwrap(state.remoteLinkConfigurationsByNodeID[nodeID]),
+            TopologyRemoteLinkConfiguration(
+                pairIdentifier: "classroom-link",
+                latencyMilliseconds: 125,
+                isEnabled: true,
+                transportMode: .localNetwork,
+                lanRole: .join,
+                lanPort: 12_345,
+                lanJoinMethod: .manual,
+                lanRemoteHost: "192.168.1.44",
+                lanRemotePort: 23_456
+            )
+        )
+    }
+
+    func testDesignConfigurationRejectsInvalidManualLocalNetworkRemoteLinkEndpoint() {
+        var state = TopologyEditorState()
+        let nodeID = addNode(kind: .remoteLink, at: CGPoint(x: 40, y: 60), to: &state)
+        let originalConfiguration = state.remoteLinkConfigurationsByNodeID[nodeID]
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveDesignDeviceConfiguration(
+                nodeID: nodeID,
+                displayName: "Invalid Remote",
+                hostLabelPolicy: nil,
+                deviceConfiguration: nil,
+                interfaceConfigurations: [],
+                switchConfiguration: nil,
+                remoteLinkConfiguration: TopologyRemoteLinkConfiguration(
+                    pairIdentifier: "classroom-link",
+                    transportMode: .localNetwork,
+                    lanRole: .join,
+                    lanJoinMethod: .manual,
+                    lanRemoteHost: "   ",
+                    lanRemotePort: 0
+                ),
+                hostWirelessConfiguration: nil
+            )
+        )
+
+        XCTAssertEqual(state.lastValidationError, .invalidDeviceConfiguration)
+        XCTAssertEqual(state.remoteLinkConfigurationsByNodeID[nodeID], originalConfiguration)
+        XCTAssertNotEqual(state.graph.node(withID: nodeID)?.displayName, "Invalid Remote")
+    }
+
     func testDesignConfigurationAssociatesWirelessPCBySSIDAndReservesItsPort() throws {
         var state = TopologyEditorState()
         let switchID = addNode(kind: .networkSwitch, at: CGPoint(x: 20, y: 20), to: &state)
@@ -342,6 +596,7 @@ final class TopologyEditorReducerTests: XCTestCase {
             action: .saveDesignDeviceConfiguration(
                 nodeID: pcID,
                 displayName: "Wireless PC",
+                hostLabelPolicy: nil,
                 deviceConfiguration: TopologyRuntimeDeviceConfiguration(
                     ipAddress: "192.168.50.10", subnetMask: "255.255.255.0"
                 ),
@@ -741,6 +996,7 @@ final class TopologyEditorReducerTests: XCTestCase {
             action: .saveDesignDeviceConfiguration(
                 nodeID: routerID,
                 displayName: "Classroom Router",
+                hostLabelPolicy: nil,
                 deviceConfiguration: nil,
                 interfaceConfigurations: configurations,
                 switchConfiguration: nil,
@@ -2017,6 +2273,260 @@ final class TopologyEditorReducerTests: XCTestCase {
         XCTAssertTrue(isolatedHTML.contains("default-src 'none'"))
     }
 
+    func testVirtualHostEditorSelectsEditsDefaultsAndFallsBackAfterDeletion() throws {
+        let first = try TopologyRuntimeWebVirtualHost(
+            id: "first",
+            hostname: "first.lab",
+            port: nil,
+            documentRoot: "/sites/first",
+            isEnabled: true
+        )
+        let second = try TopologyRuntimeWebVirtualHost(
+            id: "second",
+            hostname: "second.lab",
+            port: nil,
+            documentRoot: "/sites/second",
+            isEnabled: true
+        )
+        let existing = try TopologyRuntimeWebVirtualHostConfiguration(
+            hosts: [first, second],
+            defaultHostID: first.id
+        )
+        let editedSecond = try TopologyRuntimeWebVirtualHost(
+            id: "renamed-second",
+            hostname: "second.lab",
+            port: 8080,
+            documentRoot: "/sites/second-v2",
+            isEnabled: true
+        )
+
+        let edited = try TopologyRuntimeVirtualHostEditor.saving(
+            editedSecond,
+            selectedHostID: second.id,
+            selectedDefaultHostID: second.id,
+            in: existing
+        )
+        XCTAssertEqual(edited.defaultHostID, editedSecond.id)
+        XCTAssertEqual(edited.hosts.count, 2)
+        XCTAssertNil(edited.hosts.first(where: { $0.id == second.id }))
+        XCTAssertEqual(
+            edited.hosts.first(where: { $0.id == editedSecond.id })?.documentRoot,
+            "/sites/second-v2"
+        )
+
+        let afterDeletingDefault = try XCTUnwrap(
+            TopologyRuntimeVirtualHostEditor.removing(
+                hostID: editedSecond.id,
+                from: edited
+            )
+        )
+        XCTAssertEqual(afterDeletingDefault.defaultHostID, first.id)
+    }
+
+    func testWebBrowserHistoryEvictsOldestEntriesByCountAndByteBudget() {
+        var browser = TopologyRuntimeWebBrowserState()
+        let entryBody = Data(repeating: 0x41, count: 512 * 1_024)
+
+        for index in 0..<(TopologyRuntimeWebBrowserState.maximumHistoryEntries + 2) {
+            browser.appendHistoryEntry(TopologyRuntimeWebBrowserHistoryEntry(
+                address: "http://history.test/\(index)",
+                statusCode: 200,
+                title: nil,
+                resolvedIPAddress: "10.0.0.20",
+                contentType: "application/octet-stream",
+                bodyData: entryBody
+            ))
+        }
+
+        XCTAssertLessThanOrEqual(
+            browser.history.count,
+            TopologyRuntimeWebBrowserState.maximumHistoryEntries
+        )
+        XCTAssertFalse(browser.history.contains { $0.address.hasSuffix("/0") })
+        XCTAssertEqual(browser.historyIndex, browser.history.indices.last)
+        XCTAssertTrue(browser.canNavigateBack)
+        XCTAssertFalse(browser.canNavigateForward)
+    }
+
+    func testWebBrowserStateExposesConsistentBackAndForwardAvailability() {
+        var browserState = TopologyRuntimeWebBrowserState()
+        XCTAssertFalse(browserState.canNavigateBack)
+        XCTAssertFalse(browserState.canNavigateForward)
+
+        browserState.history = [
+            TopologyRuntimeWebBrowserHistoryEntry(
+                address: "http://router.lab:8081/admin",
+                statusCode: 200,
+                title: "Status"
+            ),
+            TopologyRuntimeWebBrowserHistoryEntry(
+                address: "http://router.lab:8081/admin/routes",
+                statusCode: 200,
+                title: "Routes"
+            ),
+        ]
+        browserState.historyIndex = 1
+        XCTAssertTrue(browserState.canNavigateBack)
+        XCTAssertFalse(browserState.canNavigateForward)
+
+        browserState.historyIndex = 0
+        XCTAssertFalse(browserState.canNavigateBack)
+        XCTAssertTrue(browserState.canNavigateForward)
+
+        browserState.historyIndex = 99
+        XCTAssertFalse(browserState.canNavigateBack)
+        XCTAssertFalse(browserState.canNavigateForward)
+    }
+
+    func testRenderedHTMLPreservesAdministrationLinksAndFormsWhileRemovingActiveContent() {
+        let response = TopologyRuntimeHTTPResponse(
+            statusCode: 200,
+            contentType: "text/html; charset=utf-8",
+            body: Data(
+                """
+                <html><body onload="steal()">
+                <a href="/admin/routes">Routes</a>
+                <form method="post" action="/admin/actions/routes/add">
+                <input name="destinationNetwork" value="10.30.0.0">
+                </form>
+                <script>steal()</script>
+                <img src="https://outside.invalid/pixel.png">
+                </body></html>
+                """.utf8
+            ),
+            detail: "test"
+        )
+
+        let rendered = response.renderedBody
+        XCTAssertTrue(rendered.contains(#"href="/admin/routes""#))
+        XCTAssertTrue(rendered.contains(#"method="post""#))
+        XCTAssertTrue(rendered.contains(#"action="/admin/actions/routes/add""#))
+        XCTAssertFalse(rendered.lowercased().contains("<script"))
+        XCTAssertFalse(rendered.lowercased().contains("onload="))
+        XCTAssertFalse(rendered.contains("https://outside.invalid"))
+    }
+
+    func testWebBrowserRequestEncodingRoundTripsPOSTAndRejectsOversizedBody() throws {
+        let request = TopologyRuntimeWebBrowserRequest(
+            address: "http://192.168.1.1:8081/admin/actions/routes/add",
+            method: "post",
+            body: Data("destinationNetwork=10.30.0.0".utf8)
+        )
+        let encoded = try XCTUnwrap(request.encodedNavigationAddress)
+        XCTAssertEqual(TopologyRuntimeWebBrowserRequest.decodeNavigationAddress(encoded), request)
+
+        let oversized = TopologyRuntimeWebBrowserRequest(
+            address: "http://192.168.1.1:8081/admin",
+            method: "POST",
+            body: Data(repeating: 0, count: TopologyRuntimeWebBrowserRequest.maximumBodySize + 1)
+        )
+        XCTAssertNil(oversized.encodedNavigationAddress)
+    }
+
+    func testRuntimeWebVirtualHostDispatchesExactHostToSelectedDocumentRoot() throws {
+        var runtime = try makeWebVirtualHostRuntime()
+
+        let response = try performWebRuntimeRequest(
+            state: &runtime.state,
+            clientNodeID: runtime.clientNodeID,
+            serverNodeID: runtime.serverNodeID,
+            hostHeader: "exact.lab",
+            target: "/"
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(response.body, "exact host")
+        XCTAssertTrue(response.detail.contains("path=/sites/exact/index.html"))
+        XCTAssertTrue(response.detail.contains("virtualHost=exact"))
+    }
+
+    func testRuntimeWebVirtualHostDispatchesHostAndPortToPortSpecificRoot() throws {
+        var runtime = try makeWebVirtualHostRuntime()
+
+        let response = try performWebRuntimeRequest(
+            state: &runtime.state,
+            clientNodeID: runtime.clientNodeID,
+            serverNodeID: runtime.serverNodeID,
+            hostHeader: "port.lab:8080",
+            target: "/"
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(response.body, "port-specific host")
+        XCTAssertTrue(response.detail.contains("path=/sites/port-specific/index.html"))
+        XCTAssertTrue(response.detail.contains("virtualHost=port-specific"))
+    }
+
+    func testRuntimeWebVirtualHostUsesDefaultHostWhenAuthorityIsMissing() throws {
+        var runtime = try makeWebVirtualHostRuntime()
+
+        let response = try performWebRuntimeRequest(
+            state: &runtime.state,
+            clientNodeID: runtime.clientNodeID,
+            serverNodeID: runtime.serverNodeID,
+            hostHeader: nil,
+            target: "/"
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(response.body, "default host")
+        XCTAssertTrue(response.detail.contains("virtualHost=default"))
+        XCTAssertTrue(response.detail.contains("dispatch=defaultHost"))
+    }
+
+    func testRuntimeWebVirtualHostFallsBackToDefaultHostForUnknownAuthority() throws {
+        var runtime = try makeWebVirtualHostRuntime()
+
+        let response = try performWebRuntimeRequest(
+            state: &runtime.state,
+            clientNodeID: runtime.clientNodeID,
+            serverNodeID: runtime.serverNodeID,
+            hostHeader: "unknown.lab",
+            target: "/"
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(response.body, "default host")
+        XCTAssertTrue(response.detail.contains("virtualHost=default"))
+        XCTAssertTrue(response.detail.contains("dispatch=defaultHost"))
+    }
+
+    func testRuntimeWebVirtualHostRejectsRepeatedlyEncodedTraversalRequest() throws {
+        var runtime = try makeWebVirtualHostRuntime()
+
+        let response = try performWebRuntimeRequest(
+            state: &runtime.state,
+            clientNodeID: runtime.clientNodeID,
+            serverNodeID: runtime.serverNodeID,
+            hostHeader: "exact.lab",
+            target: "/..%252Fsecret.txt"
+        )
+
+        XCTAssertEqual(response.statusCode, 400)
+        XCTAssertEqual(response.body, "Bad Request\n")
+        XCTAssertEqual(response.detail, "unsafePath")
+        XCTAssertFalse(response.body.contains("outside document roots"))
+    }
+
+    func testRuntimeWebServerWithoutVirtualHostsPreservesLegacyDocumentRoot() throws {
+        var runtime = try makeWebVirtualHostRuntime()
+        runtime.state.runtimeWebServerConfigurationsByNodeID[runtime.serverNodeID] =
+            TopologyRuntimeWebServerConfiguration(port: 8080, documentRoot: "/www")
+
+        let response = try performWebRuntimeRequest(
+            state: &runtime.state,
+            clientNodeID: runtime.clientNodeID,
+            serverNodeID: runtime.serverNodeID,
+            hostHeader: "anything.lab",
+            target: "/"
+        )
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(response.body, "legacy root")
+        XCTAssertTrue(response.detail.contains("path=/www/index.html"))
+        XCTAssertTrue(response.detail.contains("documentRoot=legacy"))
+    }
+
     func testExecutePingRejectsMalformedCommand() {
         var state = TopologyEditorState()
 
@@ -2962,6 +3472,152 @@ final class TopologyEditorReducerTests: XCTestCase {
         )
     }
 
+    func testLegacyDNSActionsPreserveMultipleAddressRecordsMirroringAndPersistenceOrder() throws {
+        var state = TopologyEditorState()
+        let sourceNodeID = addNode(kind: .pc, at: CGPoint(x: 30, y: 30), to: &state)
+
+        saveRuntimeIP(
+            nodeID: sourceNodeID,
+            ipAddress: "10.2.0.10",
+            subnetMask: "255.255.255.0",
+            state: &state
+        )
+        startLocalDNSServer(nodeID: sourceNodeID, state: &state)
+
+        for address in ["10.2.0.44", "10.2.0.45", "10.2.0.46", "10.2.0.46"] {
+            TopologyEditorReducer.reduce(
+                state: &state,
+                action: .runtimeDNSAddRecord(
+                    nodeID: sourceNodeID,
+                    hostname: "service.lab",
+                    targetIPAddress: address
+                )
+            )
+            XCTAssertEqual(state.lastRuntimeEvent?.code, .dnsRecordRegistered)
+            XCTAssertNil(state.lastRuntimeFault)
+        }
+
+        XCTAssertEqual(
+            state.runtimeDNSServerConfigurationsByNodeID[sourceNodeID]?.typedRecords.map(\.target),
+            ["10.2.0.44", "10.2.0.45", "10.2.0.46"]
+        )
+        XCTAssertEqual(
+            state.runtimeDNSServerConfigurationsByNodeID[sourceNodeID]?
+                .recordsByHostname["service.lab"]?.targetIPAddress,
+            "10.2.0.44"
+        )
+        let mirroredBeforeRemoval = try XCTUnwrap(
+            state.virtualFileSystemsByNodeID[sourceNodeID]?.textFile(at: TopologyRuntimeDNSHostsFile.path)
+        )
+        XCTAssertEqual(
+            TopologyRuntimeDNSHostsFile.typedRecords(from: mirroredBeforeRemoval).map(\.target),
+            ["10.2.0.44", "10.2.0.45", "10.2.0.46"]
+        )
+
+        let projectURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FiliusPad-DNS-Legacy-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+        let store = TopologyProjectStore(fileURL: projectURL)
+        try store.save(state: state, savedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        var restored = try store.load()
+
+        XCTAssertEqual(
+            restored.runtimeDNSServerConfigurationsByNodeID[sourceNodeID]?.typedRecords.map(\.target),
+            ["10.2.0.44", "10.2.0.45", "10.2.0.46"]
+        )
+        XCTAssertEqual(
+            try restored.virtualFileSystemsByNodeID[sourceNodeID]?
+                .textFile(at: TopologyRuntimeDNSHostsFile.path),
+            mirroredBeforeRemoval
+        )
+
+        startLocalDNSServer(nodeID: sourceNodeID, state: &restored)
+        TopologyEditorReducer.reduce(
+            state: &restored,
+            action: .runtimeDNSRemoveRecord(nodeID: sourceNodeID, hostname: "service.lab")
+        )
+
+        XCTAssertEqual(restored.lastRuntimeEvent?.code, .dnsRecordRemoved)
+        XCTAssertNil(restored.lastRuntimeFault)
+        XCTAssertEqual(
+            restored.runtimeDNSServerConfigurationsByNodeID[sourceNodeID]?.typedRecords.map(\.target),
+            ["10.2.0.45", "10.2.0.46"]
+        )
+        XCTAssertEqual(
+            restored.runtimeDNSServerConfigurationsByNodeID[sourceNodeID]?
+                .recordsByHostname["service.lab"]?.targetIPAddress,
+            "10.2.0.45"
+        )
+        let mirroredAfterRemoval = try XCTUnwrap(
+            restored.virtualFileSystemsByNodeID[sourceNodeID]?.textFile(at: TopologyRuntimeDNSHostsFile.path)
+        )
+        XCTAssertEqual(
+            TopologyRuntimeDNSHostsFile.typedRecords(from: mirroredAfterRemoval).map(\.target),
+            ["10.2.0.45", "10.2.0.46"]
+        )
+    }
+
+    func testDNSRecursionApplyPersistsLatestForwarderAndUsesItForLookup() {
+        var state = TopologyEditorState()
+        let resolverNodeID = addNode(kind: .pc, at: CGPoint(x: 30, y: 30), to: &state)
+        let authoritativeNodeID = addNode(kind: .pc, at: CGPoint(x: 280, y: 30), to: &state)
+
+        saveRuntimeIP(
+            nodeID: resolverNodeID,
+            ipAddress: "10.0.0.10",
+            subnetMask: "255.255.255.0",
+            state: &state
+        )
+        saveRuntimeIP(
+            nodeID: authoritativeNodeID,
+            ipAddress: "10.0.0.53",
+            subnetMask: "255.255.255.0",
+            state: &state
+        )
+        connect(resolverNodeID, authoritativeNodeID, state: &state)
+        startLocalDNSServer(nodeID: resolverNodeID, state: &state)
+        startLocalDNSServer(nodeID: authoritativeNodeID, state: &state)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSAddRecord(
+                nodeID: authoritativeNodeID,
+                hostname: "saved-forwarder.test",
+                targetIPAddress: "10.0.0.44"
+            )
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSSetRecursion(
+                nodeID: resolverNodeID,
+                enabled: true,
+                forwardingServerIPAddress: "10.0.0.53"
+            )
+        )
+
+        XCTAssertEqual(
+            state.runtimeDNSServerConfigurationsByNodeID[resolverNodeID]?.forwardingServerIPAddress,
+            "10.0.0.53"
+        )
+        XCTAssertTrue(
+            state.runtimeDNSServerConfigurationsByNodeID[resolverNodeID]?.recursiveResolutionEnabled == true
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSResolveTypedRecord(
+                nodeID: resolverNodeID,
+                hostname: "saved-forwarder.test",
+                recordType: .address
+            )
+        )
+
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .dnsResolveSucceeded)
+        XCTAssertTrue(state.lastRuntimeEvent?.detail?.contains("A=10.0.0.44") == true)
+        XCTAssertTrue(state.lastRuntimeEvent?.detail?.contains("server=10.0.0.53") == true)
+        XCTAssertNil(state.lastRuntimeFault)
+    }
+
     func testExecuteDNSResolveUnknownHostUsesAttributableFault() {
         var state = TopologyEditorState()
         let sourceNodeID = addNode(kind: .pc, at: CGPoint(x: 30, y: 30), to: &state)
@@ -3036,6 +3692,285 @@ final class TopologyEditorReducerTests: XCTestCase {
         XCTAssertEqual(state.runtimeConsoleEntriesByNodeID[sourceNodeID]?.last, "DNS record removed: classroom.local")
     }
 
+    func testTypedDNSMXAndNSReducerActionsAddResolveAndRemoveRecords() {
+        var state = TopologyEditorState()
+        let dnsNodeID = addNode(kind: .pc, at: CGPoint(x: 30, y: 30), to: &state)
+        state.runtimeDeviceConfigurations[dnsNodeID] = TopologyRuntimeDeviceConfiguration(
+            ipAddress: "10.2.0.10",
+            subnetMask: "255.255.255.0",
+            dnsServer: "10.2.0.10"
+        )
+        startLocalDNSServer(nodeID: dnsNodeID, state: &state)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSAddTypedRecord(
+                nodeID: dnsNodeID,
+                hostname: "mail.example.test",
+                recordType: .mailExchange,
+                target: "mx.example.test.",
+                ttlSeconds: 600
+            )
+        )
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .dnsRecordRegistered)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSAddTypedRecord(
+                nodeID: dnsNodeID,
+                hostname: "example.test",
+                recordType: .nameServer,
+                target: "ns1.example.test.",
+                ttlSeconds: 900
+            )
+        )
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .dnsRecordRegistered)
+
+        guard let dnsConfiguration = state.runtimeDNSServerConfigurationsByNodeID[dnsNodeID] else {
+            XCTFail(
+                "Typed DNS configuration missing; installed=\(String(describing: state.runtimeInstalledProgramsByNodeID[dnsNodeID])), active=\(String(describing: state.runtimeActiveProgramByNodeID[dnsNodeID])), socket=\(String(describing: state.runtimeDNSServerSocketIDByNodeID[dnsNodeID])), event=\(String(describing: state.lastRuntimeEvent)), fault=\(String(describing: state.lastRuntimeFault))"
+            )
+            return
+        }
+        let typedRecords = dnsConfiguration.additionalTypedRecords
+        XCTAssertTrue(typedRecords.contains {
+            $0.name.rawValue == "mail.example.test"
+                && $0.type == .mailExchange
+                && $0.target == "mx.example.test."
+                && $0.ttlSeconds == 600
+        })
+        XCTAssertTrue(typedRecords.contains {
+            $0.name.rawValue == "example.test"
+                && $0.type == .nameServer
+                && $0.target == "ns1.example.test."
+                && $0.ttlSeconds == 900
+        })
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSResolveTypedRecord(
+                nodeID: dnsNodeID,
+                hostname: "mail.example.test",
+                recordType: .mailExchange
+            )
+        )
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .dnsResolveSucceeded)
+        XCTAssertTrue(state.lastRuntimeEvent?.detail?.contains("type=MX") == true)
+        XCTAssertTrue(state.lastRuntimeEvent?.detail?.contains("mx.example.test") == true)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSResolveTypedRecord(
+                nodeID: dnsNodeID,
+                hostname: "example.test",
+                recordType: .nameServer
+            )
+        )
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .dnsResolveSucceeded)
+        XCTAssertTrue(state.lastRuntimeEvent?.detail?.contains("type=NS") == true)
+        XCTAssertTrue(state.lastRuntimeEvent?.detail?.contains("ns1.example.test") == true)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSRemoveTypedRecord(
+                nodeID: dnsNodeID,
+                hostname: "mail.example.test",
+                recordType: .mailExchange,
+                target: "mx.example.test."
+            )
+        )
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .dnsRecordRemoved)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSRemoveTypedRecord(
+                nodeID: dnsNodeID,
+                hostname: "example.test",
+                recordType: .nameServer,
+                target: "ns1.example.test."
+            )
+        )
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .dnsRecordRemoved)
+        XCTAssertTrue(
+            state.runtimeDNSServerConfigurationsByNodeID[dnsNodeID]?.additionalTypedRecords.isEmpty == true
+        )
+    }
+
+    func testTypedDNSRecursiveForwardingResolvesAcrossTwoDNSServers() {
+        var state = TopologyEditorState()
+        let resolverNodeID = addNode(kind: .pc, at: CGPoint(x: 30, y: 30), to: &state)
+        let authoritativeNodeID = addNode(kind: .pc, at: CGPoint(x: 280, y: 30), to: &state)
+
+        saveRuntimeIP(
+            nodeID: resolverNodeID,
+            ipAddress: "10.0.0.10",
+            subnetMask: "255.255.255.0",
+            state: &state
+        )
+        saveRuntimeIP(
+            nodeID: authoritativeNodeID,
+            ipAddress: "10.0.0.53",
+            subnetMask: "255.255.255.0",
+            state: &state
+        )
+        connect(resolverNodeID, authoritativeNodeID, state: &state)
+        startLocalDNSServer(nodeID: resolverNodeID, state: &state)
+        startLocalDNSServer(nodeID: authoritativeNodeID, state: &state)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSAddTypedRecord(
+                nodeID: authoritativeNodeID,
+                hostname: "mail.forwarded.test",
+                recordType: .mailExchange,
+                target: "mx.forwarded.test.",
+                ttlSeconds: 120
+            )
+        )
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .dnsRecordRegistered)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSSetRecursion(
+                nodeID: resolverNodeID,
+                enabled: true,
+                forwardingServerIPAddress: "10.0.0.53"
+            )
+        )
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .dnsRecordRegistered)
+        XCTAssertTrue(
+            state.runtimeDNSServerConfigurationsByNodeID[resolverNodeID]?.recursiveResolutionEnabled == true
+        )
+        XCTAssertEqual(
+            state.runtimeDNSServerConfigurationsByNodeID[resolverNodeID]?.forwardingServerIPAddress,
+            "10.0.0.53"
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSResolveTypedRecord(
+                nodeID: resolverNodeID,
+                hostname: "mail.forwarded.test",
+                recordType: .mailExchange
+            )
+        )
+
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .dnsResolveSucceeded)
+        XCTAssertTrue(state.lastRuntimeEvent?.detail?.contains("server=10.0.0.53") == true)
+        XCTAssertTrue(state.lastRuntimeEvent?.detail?.contains("hops=1") == true)
+        XCTAssertNil(state.lastRuntimeFault)
+    }
+
+    func testTypedDNSRecursiveForwardingRejectsUnreachableUpstream() {
+        var state = TopologyEditorState()
+        let resolverNodeID = addNode(kind: .pc, at: CGPoint(x: 30, y: 30), to: &state)
+        let authoritativeNodeID = addNode(kind: .pc, at: CGPoint(x: 280, y: 30), to: &state)
+
+        saveRuntimeIP(
+            nodeID: resolverNodeID,
+            ipAddress: "10.0.0.10",
+            subnetMask: "255.255.255.0",
+            state: &state
+        )
+        saveRuntimeIP(
+            nodeID: authoritativeNodeID,
+            ipAddress: "10.0.0.53",
+            subnetMask: "255.255.255.0",
+            state: &state
+        )
+        startLocalDNSServer(nodeID: resolverNodeID, state: &state)
+        startLocalDNSServer(nodeID: authoritativeNodeID, state: &state)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSAddTypedRecord(
+                nodeID: authoritativeNodeID,
+                hostname: "mail.unreachable.test",
+                recordType: .mailExchange,
+                target: "mx.unreachable.test.",
+                ttlSeconds: 120
+            )
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSSetRecursion(
+                nodeID: resolverNodeID,
+                enabled: true,
+                forwardingServerIPAddress: "10.0.0.53"
+            )
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSResolveTypedRecord(
+                nodeID: resolverNodeID,
+                hostname: "mail.unreachable.test",
+                recordType: .mailExchange
+            )
+        )
+
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .dnsResolveRejectedUnreachable)
+        XCTAssertEqual(state.lastRuntimeFault?.code, "dnsResolutionFailed")
+        XCTAssertTrue(state.lastRuntimeFault?.message.contains("10.0.0.53") == true)
+    }
+
+    func testTypedDNSResolverReusesTTLCacheWithoutAdditionalNetworkPackets() {
+        var state = TopologyEditorState()
+        let clientNodeID = addNode(kind: .pc, at: CGPoint(x: 30, y: 30), to: &state)
+        let dnsNodeID = addNode(kind: .pc, at: CGPoint(x: 280, y: 30), to: &state)
+        connect(clientNodeID, dnsNodeID, state: &state)
+        saveRuntimeIP(
+            nodeID: clientNodeID,
+            ipAddress: "10.0.0.10",
+            subnetMask: "255.255.255.0",
+            state: &state
+        )
+        saveRuntimeIP(
+            nodeID: dnsNodeID,
+            ipAddress: "10.0.0.53",
+            subnetMask: "255.255.255.0",
+            state: &state
+        )
+        startLocalDNSServer(nodeID: dnsNodeID, state: &state)
+        let clientConfiguration = tryUnwrap(state.runtimeDeviceConfigurations[clientNodeID])
+        state.runtimeDeviceConfigurations[clientNodeID] = TopologyRuntimeDeviceConfiguration(
+            ipAddress: clientConfiguration.ipAddress,
+            subnetMask: clientConfiguration.subnetMask,
+            defaultGateway: clientConfiguration.defaultGateway,
+            dnsServer: "10.0.0.53"
+        )
+        state.networkRuntime.updateDeviceConfiguration(
+            nodeID: clientNodeID,
+            configuration: tryUnwrap(state.runtimeDeviceConfigurations[clientNodeID])
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSAddTypedRecord(
+                nodeID: dnsNodeID,
+                hostname: "school.cache.test",
+                recordType: .nameServer,
+                target: "ns.school.cache.test.",
+                ttlSeconds: 120
+            )
+        )
+
+        let first = state.resolveRuntimeDNSQuestion(
+            nodeID: clientNodeID,
+            hostname: "school.cache.test",
+            recordType: .nameServer
+        )
+        let firstTraceCount = state.networkRuntime.state.packetTraces.count
+        let second = state.resolveRuntimeDNSQuestion(
+            nodeID: clientNodeID,
+            hostname: "school.cache.test",
+            recordType: .nameServer
+        )
+
+        XCTAssertFalse(first.trace.cacheHit)
+        XCTAssertTrue(second.trace.cacheHit)
+        XCTAssertEqual(state.networkRuntime.state.packetTraces.count, firstTraceCount)
+        XCTAssertEqual(state.runtimeTypedDNSResolverCacheByNodeID[clientNodeID]?.entryCount, 1)
+    }
+
     func testExecuteDNSRemoveUnknownHostUsesAttributableFault() {
         var state = TopologyEditorState()
         let sourceNodeID = addNode(kind: .pc, at: CGPoint(x: 30, y: 30), to: &state)
@@ -3049,6 +3984,158 @@ final class TopologyEditorReducerTests: XCTestCase {
         XCTAssertEqual(state.lastRuntimeEvent?.code, .dnsRecordRejectedUnknownHost)
         XCTAssertEqual(state.lastRuntimeFault?.category, .networkService)
         XCTAssertEqual(state.lastRuntimeFault?.code, "dnsUnknownHost")
+    }
+
+    func testOrdinaryHostnameResolutionFollowsNSReferralFromRequestingClient() {
+        var state = TopologyEditorState()
+        let clientNodeID = addNode(kind: .pc, at: CGPoint(x: 30, y: 30), to: &state)
+        let referralNodeID = addNode(kind: .pc, at: CGPoint(x: 280, y: 30), to: &state)
+        let authorityNodeID = addNode(kind: .pc, at: CGPoint(x: 530, y: 30), to: &state)
+        let switchNodeID = addNode(kind: .networkSwitch, at: CGPoint(x: 280, y: 140), to: &state)
+        connect(clientNodeID, switchNodeID, state: &state)
+        connect(referralNodeID, switchNodeID, state: &state)
+        connect(authorityNodeID, switchNodeID, state: &state)
+
+        saveRuntimeIP(
+            nodeID: clientNodeID, ipAddress: "10.0.0.10",
+            subnetMask: "255.255.255.0", state: &state
+        )
+        saveRuntimeIP(
+            nodeID: referralNodeID, ipAddress: "10.0.0.1",
+            subnetMask: "255.255.255.0", state: &state
+        )
+        saveRuntimeIP(
+            nodeID: authorityNodeID, ipAddress: "10.0.0.53",
+            subnetMask: "255.255.255.0", state: &state
+        )
+        startLocalDNSServer(nodeID: referralNodeID, state: &state)
+        startLocalDNSServer(nodeID: authorityNodeID, state: &state)
+
+        let clientConfiguration = tryUnwrap(state.runtimeDeviceConfigurations[clientNodeID])
+        state.runtimeDeviceConfigurations[clientNodeID] = TopologyRuntimeDeviceConfiguration(
+            ipAddress: clientConfiguration.ipAddress,
+            subnetMask: clientConfiguration.subnetMask,
+            defaultGateway: clientConfiguration.defaultGateway,
+            dnsServer: "10.0.0.1"
+        )
+        state.networkRuntime.updateDeviceConfiguration(
+            nodeID: clientNodeID,
+            configuration: tryUnwrap(state.runtimeDeviceConfigurations[clientNodeID])
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSAddTypedRecord(
+                nodeID: referralNodeID, hostname: "school.test",
+                recordType: .nameServer, target: "ns.school.test.", ttlSeconds: 120
+            )
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSAddTypedRecord(
+                nodeID: referralNodeID, hostname: "ns.school.test",
+                recordType: .address, target: "10.0.0.53", ttlSeconds: 120
+            )
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSAddTypedRecord(
+                nodeID: authorityNodeID, hostname: "www.school.test",
+                recordType: .address, target: "10.0.0.20", ttlSeconds: 120
+            )
+        )
+
+        let first = state.resolveRuntimeHostname(
+            nodeID: clientNodeID, hostname: "www.school.test"
+        )
+        let packetTraceCount = state.networkRuntime.state.packetTraces.count
+        let second = state.resolveRuntimeHostname(
+            nodeID: clientNodeID, hostname: "www.school.test"
+        )
+
+        XCTAssertEqual(
+            first,
+            .success(
+                record: TopologyRuntimeDNSRecord(
+                    hostname: "www.school.test", targetIPAddress: "10.0.0.20"
+                ),
+                serverIPAddress: "10.0.0.1", cached: false
+            )
+        )
+        XCTAssertEqual(
+            second,
+            .success(
+                record: TopologyRuntimeDNSRecord(
+                    hostname: "www.school.test", targetIPAddress: "10.0.0.20"
+                ),
+                serverIPAddress: "10.0.0.1", cached: true
+            )
+        )
+        XCTAssertEqual(state.networkRuntime.state.packetTraces.count, packetTraceCount + 1)
+        XCTAssertEqual(state.networkRuntime.state.packetTraces.last?.detail, "DNS cache hit server=10.0.0.1")
+    }
+
+    func testOrdinaryHostnameResolutionUsesRecursiveForwarder() {
+        var state = TopologyEditorState()
+        let clientNodeID = addNode(kind: .pc, at: CGPoint(x: 30, y: 30), to: &state)
+        let resolverNodeID = addNode(kind: .pc, at: CGPoint(x: 280, y: 30), to: &state)
+        let upstreamNodeID = addNode(kind: .pc, at: CGPoint(x: 530, y: 30), to: &state)
+        let switchNodeID = addNode(kind: .networkSwitch, at: CGPoint(x: 280, y: 140), to: &state)
+        connect(clientNodeID, switchNodeID, state: &state)
+        connect(resolverNodeID, switchNodeID, state: &state)
+        connect(upstreamNodeID, switchNodeID, state: &state)
+
+        saveRuntimeIP(
+            nodeID: clientNodeID, ipAddress: "10.1.0.10",
+            subnetMask: "255.255.255.0", state: &state
+        )
+        saveRuntimeIP(
+            nodeID: resolverNodeID, ipAddress: "10.1.0.1",
+            subnetMask: "255.255.255.0", state: &state
+        )
+        saveRuntimeIP(
+            nodeID: upstreamNodeID, ipAddress: "10.1.0.53",
+            subnetMask: "255.255.255.0", state: &state
+        )
+        startLocalDNSServer(nodeID: resolverNodeID, state: &state)
+        startLocalDNSServer(nodeID: upstreamNodeID, state: &state)
+
+        let clientConfiguration = tryUnwrap(state.runtimeDeviceConfigurations[clientNodeID])
+        state.runtimeDeviceConfigurations[clientNodeID] = TopologyRuntimeDeviceConfiguration(
+            ipAddress: clientConfiguration.ipAddress,
+            subnetMask: clientConfiguration.subnetMask,
+            defaultGateway: clientConfiguration.defaultGateway,
+            dnsServer: "10.1.0.1"
+        )
+        state.networkRuntime.updateDeviceConfiguration(
+            nodeID: clientNodeID,
+            configuration: tryUnwrap(state.runtimeDeviceConfigurations[clientNodeID])
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSAddTypedRecord(
+                nodeID: upstreamNodeID, hostname: "forwarded.school.test",
+                recordType: .address, target: "10.1.0.20", ttlSeconds: 120
+            )
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeDNSSetRecursion(
+                nodeID: resolverNodeID, enabled: true,
+                forwardingServerIPAddress: "10.1.0.53"
+            )
+        )
+
+        XCTAssertEqual(
+            state.resolveRuntimeHostname(
+                nodeID: clientNodeID, hostname: "forwarded.school.test"
+            ),
+            .success(
+                record: TopologyRuntimeDNSRecord(
+                    hostname: "forwarded.school.test", targetIPAddress: "10.1.0.20"
+                ),
+                serverIPAddress: "10.1.0.1", cached: false
+            )
+        )
     }
 
     func testExecutePingAndTraceResolveHostnameTargetsViaDNSRecords() {
@@ -3848,6 +4935,81 @@ final class TopologyEditorReducerTests: XCTestCase {
         XCTAssertTrue(state.networkRuntime.state.packetTraces.isEmpty)
     }
 
+    private struct WebVirtualHostRuntimeFixture {
+        var state: TopologyEditorState
+        let clientNodeID: UUID
+        let serverNodeID: UUID
+    }
+
+    private struct WebRuntimeResponse {
+        let statusCode: Int
+        let body: String
+        let detail: String
+    }
+
+    private func makeWebVirtualHostRuntime() throws -> WebVirtualHostRuntimeFixture {
+        let clientNodeID = uuid("00000000-0000-0000-0000-00000000A001")
+        let serverNodeID = uuid("00000000-0000-0000-0000-00000000A002")
+        let hosts = [
+            try TopologyRuntimeWebVirtualHost(
+                id: "default", hostname: "default.lab", documentRoot: "/sites/default"
+            ),
+            try TopologyRuntimeWebVirtualHost(
+                id: "exact", hostname: "exact.lab", documentRoot: "/sites/exact"
+            ),
+            try TopologyRuntimeWebVirtualHost(
+                id: "port-specific", hostname: "port.lab", port: 8080, documentRoot: "/sites/port-specific"
+            ),
+        ]
+        let virtualHosts = try TopologyRuntimeWebVirtualHostConfiguration(
+            hosts: hosts, defaultHostID: "default"
+        )
+        let fileSystem = try TopologyVirtualFileSystem(entries: [
+            TopologyVirtualFileEntry(path: "/sites", content: .directory),
+            TopologyVirtualFileEntry(path: "/sites/default", content: .directory),
+            TopologyVirtualFileEntry(path: "/sites/default/index.html", content: .text("default host")),
+            TopologyVirtualFileEntry(path: "/sites/exact", content: .directory),
+            TopologyVirtualFileEntry(path: "/sites/exact/index.html", content: .text("exact host")),
+            TopologyVirtualFileEntry(path: "/sites/port-specific", content: .directory),
+            TopologyVirtualFileEntry(path: "/sites/port-specific/index.html", content: .text("port-specific host")),
+            TopologyVirtualFileEntry(path: "/www", content: .directory),
+            TopologyVirtualFileEntry(path: "/www/index.html", content: .text("legacy root")),
+        ])
+        var state = TopologyEditorState()
+        state.virtualFileSystemsByNodeID[serverNodeID] = fileSystem
+        state.runtimeWebServerConfigurationsByNodeID[serverNodeID] = TopologyRuntimeWebServerConfiguration(
+            port: 80, documentRoot: "/www", virtualHostConfiguration: virtualHosts
+        )
+        return WebVirtualHostRuntimeFixture(
+            state: state, clientNodeID: clientNodeID, serverNodeID: serverNodeID
+        )
+    }
+
+    private func performWebRuntimeRequest(
+        state: inout TopologyEditorState,
+        clientNodeID: UUID,
+        serverNodeID: UUID,
+        hostHeader: String?,
+        target: String
+    ) throws -> WebRuntimeResponse {
+        _ = clientNodeID
+        let configuration = try XCTUnwrap(
+            state.runtimeWebServerConfigurationsByNodeID[serverNodeID]
+        )
+        let fileSystem = state.virtualFileSystemsByNodeID[serverNodeID] ?? .defaultForDevice()
+        let request = TopologyRuntimeHTTPParsedRequest(
+            method: "GET", target: target, path: target, host: hostHeader, body: Data()
+        )
+        let response = TopologyRuntimeHTTPResponse.serve(
+            request: request, fileSystem: fileSystem, configuration: configuration
+        )
+        return WebRuntimeResponse(
+            statusCode: response.statusCode,
+            body: String(decoding: response.body, as: UTF8.self),
+            detail: response.detail
+        )
+    }
+
     private func addNode(kind: TopologyNodeKind, at position: CGPoint, to state: inout TopologyEditorState) -> UUID {
         addNode(kind: kind, at: position, nodeID: UUID(), to: &state)
     }
@@ -4335,6 +5497,77 @@ final class TopologyEditorReducerTests: XCTestCase {
         XCTAssertEqual(state.lastRuntimeFault?.code, "emailClientSendRejected")
     }
 
+    func testEmailDeletionReducerActionRemovesInboxAndSentMessagesAndEmitsEvents() {
+        var state = TopologyEditorState()
+        let nodeID = addNode(kind: .pc, at: CGPoint(x: 20, y: 20), to: &state)
+        activateRuntimeProgram(.emailClient, nodeID: nodeID, state: &state)
+
+        let inboxMessage = TopologyRuntimeEmailMessage(
+            id: 101,
+            from: TopologyRuntimeEmailAddress(mailAddress: "bob@example.test"),
+            to: [TopologyRuntimeEmailAddress(mailAddress: "alice@example.test")],
+            subject: "Incoming",
+            body: "Inbox body"
+        )
+        let sentMessage = TopologyRuntimeEmailMessage(
+            id: 102,
+            from: TopologyRuntimeEmailAddress(mailAddress: "alice@example.test"),
+            to: [TopologyRuntimeEmailAddress(mailAddress: "bob@example.test")],
+            subject: "Outgoing",
+            body: "Sent body",
+            isNew: false,
+            isSent: true
+        )
+        let configuration = TopologyRuntimeEmailClientConfiguration(
+            pop3Host: "10.0.0.20",
+            smtpHost: "10.0.0.20",
+            username: "alice",
+            password: "secret",
+            name: "Alice Example",
+            email: "alice@example.test",
+            inbox: [inboxMessage],
+            sent: [sentMessage],
+            nextMessageID: 103
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeEmailClientConfiguration(nodeID: nodeID, configuration: configuration)
+        )
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .emailClientConfigured)
+        XCTAssertNil(state.lastRuntimeFault)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeEmailClientDeleteMessages(
+                nodeID: nodeID,
+                folder: .inbox,
+                messageIDs: [inboxMessage.id]
+            )
+        )
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .emailClientMessagesDeleted)
+        XCTAssertTrue(state.lastRuntimeEvent?.detail?.contains("folder=inbox") == true)
+        XCTAssertTrue(state.lastRuntimeEvent?.detail?.contains("messages=1") == true)
+        XCTAssertEqual(state.runtimeEmailClientConfigurationsByNodeID[nodeID]?.inbox, [])
+        XCTAssertEqual(state.runtimeEmailClientConfigurationsByNodeID[nodeID]?.sent, [sentMessage])
+        XCTAssertNil(state.lastRuntimeFault)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeEmailClientDeleteMessages(
+                nodeID: nodeID,
+                folder: .sent,
+                messageIDs: [sentMessage.id]
+            )
+        )
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .emailClientMessagesDeleted)
+        XCTAssertTrue(state.lastRuntimeEvent?.detail?.contains("folder=sent") == true)
+        XCTAssertTrue(state.lastRuntimeEvent?.detail?.contains("messages=1") == true)
+        XCTAssertEqual(state.runtimeEmailClientConfigurationsByNodeID[nodeID]?.inbox, [])
+        XCTAssertEqual(state.runtimeEmailClientConfigurationsByNodeID[nodeID]?.sent, [])
+        XCTAssertNil(state.lastRuntimeFault)
+    }
+
     func testRemoveRouterInterfaceDistinguishesMissingActionFields() {
         var state = TopologyEditorState()
         let nodeID = UUID()
@@ -4363,6 +5596,1218 @@ final class TopologyEditorReducerTests: XCTestCase {
         XCTAssertEqual(topologyRuntimeDeviceTitle(for: .pc), FiliusLocalization.t("runtime.kind.pc"))
         XCTAssertEqual(topologyRuntimeDeviceTitle(for: .notebook), FiliusLocalization.t("model.notebook"))
         XCTAssertNotEqual(topologyRuntimeDeviceTitle(for: .notebook), topologyRuntimeDeviceTitle(for: .pc))
+    }
+
+
+    func testWebAdministrationPolicyIsDefaultDeniedAndRouterGatewayOnly() throws {
+        var state = TopologyEditorState()
+        let routerID = addNode(kind: .router, at: CGPoint(x: 20, y: 20), to: &state)
+        let gatewayID = addNode(kind: .gateway, at: CGPoint(x: 180, y: 20), to: &state)
+        let pcID = addNode(kind: .pc, at: CGPoint(x: 340, y: 20), to: &state)
+        let network = try TopologyRuntimeWebAdministrationIPv4Network(
+            networkAddress: "192.168.10.77",
+            subnetMask: "255.255.255.0"
+        )
+        let policy = TopologyRuntimeWebAdministrationAccessPolicy(
+            isEnabled: true,
+            allowedSourceNetworks: [network]
+        )
+
+        XCTAssertNil(state.runtimeWebAdministrationConfigurationsByNodeID[routerID])
+        XCTAssertNil(state.runtimeWebAdministrationConfigurationsByNodeID[gatewayID])
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeWebAdministrationPolicy(nodeID: routerID, policy: policy)
+        )
+        XCTAssertEqual(state.runtimeWebAdministrationConfigurationsByNodeID[routerID]?.accessPolicy, policy)
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .runtimeWebAdministrationConfigurationSaved)
+        XCTAssertNil(state.lastRuntimeFault)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeWebAdministrationPolicy(nodeID: pcID, policy: policy)
+        )
+        XCTAssertNil(state.runtimeWebAdministrationConfigurationsByNodeID[pcID])
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .runtimeWebAdministrationConfigurationRejected)
+        XCTAssertEqual(state.lastRuntimeFault?.code, "webAdministrationUnsupportedForNodeKind")
+    }
+
+    func testWebAdministrationConfigurationValidatesPortPolicyAndRunningListenerChanges() throws {
+        var state = TopologyEditorState()
+        let routerID = addNode(kind: .router, at: CGPoint(x: 20, y: 20), to: &state)
+        let allowedNetwork = try TopologyRuntimeWebAdministrationIPv4Network(
+            networkAddress: "192.168.50.0",
+            subnetMask: "255.255.255.0"
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeWebAdministrationConfiguration(
+                nodeID: routerID,
+                configuration: TopologyRuntimeWebAdministrationConfiguration(
+                    port: 0,
+                    accessPolicy: TopologyRuntimeWebAdministrationAccessPolicy()
+                )
+            )
+        )
+        XCTAssertNil(state.runtimeWebAdministrationConfigurationsByNodeID[routerID])
+        XCTAssertEqual(state.lastRuntimeFault?.code, "invalidWebAdministrationPort")
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeWebAdministrationConfiguration(
+                nodeID: routerID,
+                configuration: TopologyRuntimeWebAdministrationConfiguration(
+                    port: 8081,
+                    accessPolicy: TopologyRuntimeWebAdministrationAccessPolicy(
+                        isEnabled: true,
+                        allowedSourceNetworks: []
+                    )
+                )
+            )
+        )
+        XCTAssertNil(state.runtimeWebAdministrationConfigurationsByNodeID[routerID])
+        XCTAssertEqual(state.lastRuntimeFault?.code, "webAdministrationPolicyNotReady")
+
+        let configuration = TopologyRuntimeWebAdministrationConfiguration(
+            port: 8081,
+            accessPolicy: TopologyRuntimeWebAdministrationAccessPolicy(
+                isEnabled: true,
+                allowedSourceNetworks: [allowedNetwork]
+            )
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeWebAdministrationConfiguration(
+                nodeID: routerID,
+                configuration: configuration
+            )
+        )
+        XCTAssertEqual(state.runtimeWebAdministrationConfigurationsByNodeID[routerID], configuration)
+        XCTAssertNil(state.lastRuntimeFault)
+
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationStart(nodeID: routerID, port: nil)
+        )
+        XCTAssertEqual(state.runtimeWebAdministrationByNodeID[routerID]?.port, 8081)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeWebAdministrationConfiguration(
+                nodeID: routerID,
+                configuration: TopologyRuntimeWebAdministrationConfiguration(
+                    port: 8082,
+                    accessPolicy: configuration.accessPolicy
+                )
+            )
+        )
+        XCTAssertEqual(state.runtimeWebAdministrationConfigurationsByNodeID[routerID], configuration)
+        XCTAssertEqual(state.lastRuntimeFault?.code, "webAdministrationRestartRequired")
+    }
+
+    func testWebAdministrationStartRejectsDefaultDeniedPolicy() {
+        var state = TopologyEditorState()
+        let routerID = addNode(kind: .router, at: CGPoint(x: 20, y: 20), to: &state)
+
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationStart(nodeID: routerID, port: "8081")
+        )
+
+        XCTAssertNil(state.runtimeWebAdministrationByNodeID[routerID])
+        XCTAssertNil(state.runtimeWebAdministrationSocketIDByNodeID[routerID])
+        XCTAssertEqual(state.lastRuntimeFault?.code, "webAdministrationPolicyNotReady")
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .runtimeWebAdministrationConfigurationRejected)
+    }
+
+    func testRouterGatewayWebAdministrationListenerLifecycleValidatesPortAndStopsCleanly() throws {
+        var state = TopologyEditorState()
+        let routerID = addNode(kind: .router, at: CGPoint(x: 20, y: 20), to: &state)
+
+        try enableWebAdministration(nodeID: routerID, state: &state)
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationStart(nodeID: routerID, port: "8081")
+        )
+
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .runtimeWebAdministrationConfigurationSaved)
+        XCTAssertEqual(state.runtimeWebAdministrationByNodeID[routerID]?.port, 8081)
+        XCTAssertNil(state.runtimeWebServerByNodeID[routerID])
+        XCTAssertNil(state.runtimeWebServerSocketIDByNodeID[routerID])
+        XCTAssertNil(state.runtimeWebServerConfigurationsByNodeID[routerID])
+        let listenerID = try XCTUnwrap(state.runtimeWebAdministrationSocketIDByNodeID[routerID])
+        XCTAssertEqual(state.networkRuntime.state.socketsByID[listenerID]?.tcpState, .listen)
+        XCTAssertEqual(state.runtimeWebAdministrationConfigurationsByNodeID[routerID]?.port, 8081)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationStart(nodeID: routerID, port: "not-a-port")
+        )
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .runtimeWebAdministrationConfigurationRejected)
+        XCTAssertEqual(state.lastRuntimeFault?.code, "invalidWebAdministrationPort")
+        XCTAssertEqual(state.runtimeWebAdministrationByNodeID[routerID]?.port, 8081)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationStop(nodeID: routerID)
+        )
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .runtimeWebAdministrationConfigurationSaved)
+        XCTAssertNil(state.runtimeWebAdministrationByNodeID[routerID])
+        XCTAssertNil(state.runtimeWebAdministrationSocketIDByNodeID[routerID])
+        XCTAssertEqual(state.networkRuntime.state.socketsByID[listenerID]?.tcpState, .closed)
+    }
+
+    func testWebServerConfigurationActionPersistsVirtualHostConfiguration() throws {
+        var state = TopologyEditorState()
+        let nodeID = addNode(kind: .pc, at: CGPoint(x: 20, y: 20), to: &state)
+        let host = try TopologyRuntimeWebVirtualHost(
+            id: "docs",
+            hostname: "docs.example.test",
+            documentRoot: "/www/docs"
+        )
+        let virtualHosts = try TopologyRuntimeWebVirtualHostConfiguration(
+            hosts: [host],
+            defaultHostID: host.id
+        )
+        let configuration = TopologyRuntimeWebServerConfiguration(
+            port: 8080,
+            documentRoot: "/www",
+            virtualHostConfiguration: virtualHosts
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeWebServerConfiguration(nodeID: nodeID, configuration: configuration)
+        )
+
+        XCTAssertEqual(state.runtimeWebServerConfigurationsByNodeID[nodeID], configuration)
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .webServerConfigurationSaved)
+        XCTAssertNil(state.lastRuntimeFault)
+    }
+
+    func testWebServerConfigurationRejectsInvalidDocumentRootTransactionally() {
+        var state = TopologyEditorState()
+        let nodeID = addNode(kind: .pc, at: CGPoint(x: 20, y: 20), to: &state)
+        let original = TopologyRuntimeWebServerConfiguration()
+        state.runtimeWebServerConfigurationsByNodeID[nodeID] = original
+        let invalid = TopologyRuntimeWebServerConfiguration(
+            port: 8080,
+            documentRoot: "relative/www"
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeWebServerConfiguration(nodeID: nodeID, configuration: invalid)
+        )
+
+        XCTAssertEqual(state.runtimeWebServerConfigurationsByNodeID[nodeID], original)
+        XCTAssertEqual(state.lastRuntimeFault?.code, "invalidWebServerConfiguration")
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .webServerRejectedInvalidConfiguration)
+    }
+
+    func testWebServerConfigurationRejectsListenerPortChangeWhileRunning() {
+        var state = TopologyEditorState()
+        let nodeID = addNode(kind: .pc, at: CGPoint(x: 20, y: 20), to: &state)
+        let running = TopologyRuntimeServiceProcessState(port: 8080)
+        let original = TopologyRuntimeWebServerConfiguration(port: 8080)
+        state.runtimeWebServerByNodeID[nodeID] = running
+        state.runtimeWebServerConfigurationsByNodeID[nodeID] = original
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeWebServerConfiguration(
+                nodeID: nodeID,
+                configuration: TopologyRuntimeWebServerConfiguration(port: 8081)
+            )
+        )
+
+        XCTAssertEqual(state.runtimeWebServerConfigurationsByNodeID[nodeID], original)
+        XCTAssertEqual(state.runtimeWebServerByNodeID[nodeID], running)
+        XCTAssertEqual(state.lastRuntimeFault?.code, "webServerPortChangeRequiresStop")
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .webServerRejectedInvalidConfiguration)
+    }
+
+    func testWebAdministrationRequestUsesPolicyAndSecretFreeSnapshot() throws {
+        var state = TopologyEditorState()
+        let gatewayID = addNode(kind: .gateway, at: CGPoint(x: 20, y: 20), to: &state)
+        let sourceNetwork = try TopologyRuntimeWebAdministrationIPv4Network(
+            networkAddress: "10.20.0.0",
+            subnetMask: "255.255.255.0"
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeWebAdministrationPolicy(
+                nodeID: gatewayID,
+                policy: TopologyRuntimeWebAdministrationAccessPolicy(
+                    isEnabled: true,
+                    allowedSourceNetworks: [sourceNetwork]
+                )
+            )
+        )
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+
+        let allowedRequest = TopologyRuntimeWebAdministrationRequest(
+            method: "GET",
+            target: "/admin",
+            sourceIPAddress: "10.20.0.42"
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: gatewayID, request: allowedRequest)
+        )
+        let allowedResponse = try XCTUnwrap(state.runtimeWebAdministrationResponsesByNodeID[gatewayID])
+        XCTAssertEqual(allowedResponse.statusCode, 200)
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .runtimeWebAdministrationRequestServed)
+        XCTAssertTrue(allowedResponse.body.contains("Gateway"))
+        XCTAssertTrue(allowedResponse.body.contains("Interface"))
+        XCTAssertFalse(allowedResponse.body.contains("password"))
+        XCTAssertFalse(allowedResponse.body.contains("secret"))
+
+        let deniedRequest = TopologyRuntimeWebAdministrationRequest(
+            method: "GET",
+            target: "/admin",
+            sourceIPAddress: "10.21.0.42"
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: gatewayID, request: deniedRequest)
+        )
+        let deniedResponse = try XCTUnwrap(state.runtimeWebAdministrationResponsesByNodeID[gatewayID])
+        XCTAssertEqual(deniedResponse.statusCode, 403)
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .runtimeWebAdministrationRequestRejected)
+        XCTAssertEqual(state.lastRuntimeFault?.code, "webAdministrationHTTP403")
+        XCTAssertFalse(deniedResponse.body.contains("Gateway"))
+    }
+
+    func testWebAdministrationListenerStateIsIndependentFromOrdinaryWebServerState() throws {
+        var state = TopologyEditorState()
+        let gatewayID = addNode(kind: .gateway, at: CGPoint(x: 20, y: 20), to: &state)
+        state.runtimeWebServerConfigurationsByNodeID[gatewayID] = TopologyRuntimeWebServerConfiguration(port: 8080)
+        state.runtimeWebServerByNodeID[gatewayID] = TopologyRuntimeServiceProcessState(port: 8080)
+        try enableWebAdministration(nodeID: gatewayID, state: &state)
+
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationStart(nodeID: gatewayID, port: "8081")
+        )
+
+        XCTAssertEqual(state.runtimeWebServerConfigurationsByNodeID[gatewayID]?.port, 8080)
+        XCTAssertEqual(state.runtimeWebServerByNodeID[gatewayID]?.port, 8080)
+        XCTAssertEqual(state.runtimeWebAdministrationConfigurationsByNodeID[gatewayID]?.port, 8081)
+        XCTAssertEqual(state.runtimeWebAdministrationByNodeID[gatewayID]?.port, 8081)
+        XCTAssertNotEqual(
+            state.runtimeWebServerSocketIDByNodeID[gatewayID],
+            state.runtimeWebAdministrationSocketIDByNodeID[gatewayID]
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationStop(nodeID: gatewayID)
+        )
+        XCTAssertEqual(state.runtimeWebServerByNodeID[gatewayID]?.port, 8080)
+        XCTAssertNil(state.runtimeWebAdministrationByNodeID[gatewayID])
+    }
+
+    func testDedicatedWebAdministrationListenerServesBrowserAndOwnsOnlyAdminNamespace() throws {
+        var state = TopologyEditorState()
+        let clientID = addNode(kind: .pc, at: CGPoint(x: 20, y: 20), to: &state)
+        let routerID = addNode(kind: .router, at: CGPoint(x: 180, y: 20), to: &state)
+        connect(clientID, routerID, state: &state)
+        saveRuntimeConfiguration(
+            nodeID: clientID,
+            ipAddress: "192.168.1.10",
+            subnetMask: "255.255.255.0",
+            defaultGateway: "",
+            state: &state
+        )
+        let routerPortID = try XCTUnwrap(state.graph.node(withID: routerID)?.ports.first?.id)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeInterfaceConfiguration(
+                nodeID: routerID,
+                portID: routerPortID,
+                ipAddress: "192.168.1.1",
+                subnetMask: "255.255.255.0"
+            )
+        )
+        try enableWebAdministration(nodeID: routerID, state: &state)
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationStart(nodeID: routerID, port: "8081")
+        )
+
+        let adminResult = state.navigateWebBrowser(
+            nodeID: clientID,
+            rawAddress: "http://192.168.1.1:8081/admin"
+        )
+        guard case let .success(adminPage) = adminResult else {
+            return XCTFail("Dedicated administration listener did not serve /admin: \(adminResult)")
+        }
+        XCTAssertEqual(adminPage.statusCode, 200)
+        XCTAssertTrue(adminPage.body.lowercased().contains("router"))
+        XCTAssertEqual(state.runtimeWebServerRequestLogsByNodeID[routerID]?.last?.path, "/admin")
+
+        let ordinaryPathResult = state.navigateWebBrowser(
+            nodeID: clientID,
+            rawAddress: "http://192.168.1.1:8081/"
+        )
+        guard case let .success(ordinaryPathPage) = ordinaryPathResult else {
+            return XCTFail("Dedicated administration listener did not return an HTTP response: \(ordinaryPathResult)")
+        }
+        XCTAssertEqual(ordinaryPathPage.statusCode, 404)
+        XCTAssertEqual(state.runtimeWebServerRequestLogsByNodeID[routerID]?.last?.detail, "administrationNamespaceOnly")
+    }
+
+    func testDedicatedWebAdministrationBrowserAppliesPOSTAndRestoresCachedHistory() throws {
+        var state = TopologyEditorState()
+        let clientID = addNode(kind: .pc, at: CGPoint(x: 20, y: 20), to: &state)
+        let routerID = addNode(kind: .router, at: CGPoint(x: 180, y: 20), to: &state)
+        connect(clientID, routerID, state: &state)
+        saveRuntimeConfiguration(
+            nodeID: clientID,
+            ipAddress: "192.168.1.10",
+            subnetMask: "255.255.255.0",
+            defaultGateway: "",
+            state: &state
+        )
+        let routerPortID = try XCTUnwrap(state.graph.node(withID: routerID)?.ports.first?.id)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeInterfaceConfiguration(
+                nodeID: routerID,
+                portID: routerPortID,
+                ipAddress: "192.168.1.1",
+                subnetMask: "255.255.255.0"
+            )
+        )
+        try enableWebAdministration(nodeID: routerID, state: &state)
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationStart(nodeID: routerID, port: "8081")
+        )
+
+        guard case let .success(statusPage) = state.navigateWebBrowser(
+            nodeID: clientID,
+            rawAddress: "http://192.168.1.1:8081/admin"
+        ) else {
+            return XCTFail("Administration status navigation failed")
+        }
+        XCTAssertTrue(statusPage.body.contains(#"href="/admin/routes""#))
+
+        let request = TopologyRuntimeWebBrowserRequest(
+            address: "http://192.168.1.1:8081/admin/actions/routes/add",
+            method: "POST",
+            body: Data(
+                "destinationNetwork=10.30.0.0&subnetMask=255.255.255.0&gatewayIPAddress=192.168.1.254&interfaceIPAddress=192.168.1.1".utf8
+            )
+        )
+        let encodedRequest = try XCTUnwrap(request.encodedNavigationAddress)
+        guard case let .success(mutationPage) = state.navigateWebBrowser(
+            nodeID: clientID,
+            rawAddress: encodedRequest
+        ) else {
+            return XCTFail("Administration POST navigation failed")
+        }
+        XCTAssertEqual(mutationPage.statusCode, 200)
+        XCTAssertFalse(mutationPage.body.isEmpty)
+        XCTAssertEqual(state.runtimeManualRoutesByNodeID[routerID]?.first?.destinationNetwork, "10.30.0.0")
+        XCTAssertEqual(mutationPage.history.count, 2)
+        XCTAssertTrue(mutationPage.canNavigateBack)
+
+        guard case let .success(restoredStatus) = state.navigateWebBrowser(
+            nodeID: clientID,
+            rawAddress: mutationPage.history[0].address,
+            historyIndex: 0
+        ) else {
+            return XCTFail("Browser history restoration failed")
+        }
+        XCTAssertEqual(restoredStatus.body, statusPage.body)
+        XCTAssertFalse(restoredStatus.canNavigateBack)
+        XCTAssertTrue(restoredStatus.canNavigateForward)
+    }
+
+    func testDedicatedWebAdministrationListenerAppliesPOSTMutationFromSimpleClient() throws {
+        var state = TopologyEditorState()
+        let clientID = addNode(kind: .pc, at: CGPoint(x: 20, y: 20), to: &state)
+        let routerID = addNode(kind: .router, at: CGPoint(x: 180, y: 20), to: &state)
+        connect(clientID, routerID, state: &state)
+        saveRuntimeConfiguration(
+            nodeID: clientID,
+            ipAddress: "192.168.1.10",
+            subnetMask: "255.255.255.0",
+            defaultGateway: "",
+            state: &state
+        )
+        let routerPortID = try XCTUnwrap(state.graph.node(withID: routerID)?.ports.first?.id)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeInterfaceConfiguration(
+                nodeID: routerID,
+                portID: routerPortID,
+                ipAddress: "192.168.1.1",
+                subnetMask: "255.255.255.0"
+            )
+        )
+        try enableWebAdministration(nodeID: routerID, state: &state)
+        activateRuntimeProgram(.simpleClient, nodeID: clientID, state: &state)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationStart(nodeID: routerID, port: "8081")
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeSimpleClientConnect(
+                nodeID: clientID,
+                destinationIPAddress: "192.168.1.1",
+                port: "8081",
+                protocolKind: .tcp
+            )
+        )
+        XCTAssertEqual(state.runtimeSimpleClientByNodeID[clientID]?.connectionState, .connected)
+
+        let body = "destinationNetwork=10.30.0.0&subnetMask=255.255.255.0&gatewayIPAddress=192.168.1.254&interfaceIPAddress=192.168.1.1"
+        let request = "POST /admin/actions/routes/add HTTP/1.1\r\nHost: 192.168.1.1:8081\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeSimpleClientSend(nodeID: clientID, message: request)
+        )
+
+        XCTAssertEqual(
+            state.runtimeManualRoutesByNodeID[routerID],
+            [
+                TopologyRuntimeManualRoute(
+                    destinationNetwork: "10.30.0.0",
+                    subnetMask: "255.255.255.0",
+                    gateway: "192.168.1.254",
+                    interfaceIPAddress: "192.168.1.1"
+                )
+            ]
+        )
+        XCTAssertEqual(state.runtimeWebServerRequestLogsByNodeID[routerID]?.last?.statusCode, 200)
+        XCTAssertTrue(
+            state.runtimeSimpleClientByNodeID[clientID]?.logs.contains(where: {
+                $0.direction == "inbound" && $0.message.contains("HTTP/1.1 200")
+            }) == true
+        )
+    }
+
+    func testWebAdministrationRouteMutationsAddDeleteAndRollback() throws {
+        var state = TopologyEditorState()
+        let routerID = addNode(kind: .router, at: CGPoint(x: 20, y: 20), to: &state)
+        try enableWebAdministration(nodeID: routerID, state: &state)
+        let add = webAdministrationPOST(
+            target: "/admin/actions/routes/add",
+            fields: [
+                "destinationNetwork": "10.30.0.0",
+                "subnetMask": "255.255.255.0",
+                "gatewayIPAddress": "192.168.1.254",
+                "interfaceIPAddress": "192.168.1.1",
+            ]
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: routerID, request: add)
+        )
+        XCTAssertEqual(
+            state.runtimeManualRoutesByNodeID[routerID],
+            [TopologyRuntimeManualRoute(
+                destinationNetwork: "10.30.0.0",
+                subnetMask: "255.255.255.0",
+                gateway: "192.168.1.254",
+                interfaceIPAddress: "192.168.1.1"
+            )]
+        )
+        XCTAssertEqual(state.runtimeWebAdministrationResponsesByNodeID[routerID]?.statusCode, 200)
+
+        let committedRoutes = state.runtimeManualRoutesByNodeID[routerID]
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: routerID, request: add)
+        )
+        XCTAssertEqual(state.runtimeManualRoutesByNodeID[routerID], committedRoutes)
+        XCTAssertEqual(state.runtimeWebAdministrationResponsesByNodeID[routerID]?.statusCode, 409)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(
+                nodeID: routerID,
+                request: webAdministrationPOST(
+                    target: "/admin/actions/routes/delete",
+                    fields: ["id": "manual-0"]
+                )
+            )
+        )
+        XCTAssertNil(state.runtimeManualRoutesByNodeID[routerID])
+        XCTAssertEqual(state.runtimeWebAdministrationResponsesByNodeID[routerID]?.statusCode, 200)
+    }
+
+    func testRunningWebAdministrationRouteAddAndDeleteChangePacketForwardingWithoutRestart() throws {
+        var state = TopologyEditorState()
+        let topology = makeTwoRouterTopology(state: &state)
+        state.runtimeManualRoutesByNodeID[topology.secondRouterNodeID] = [
+            manualRoute(destination: "10.0.0.0", gateway: "10.0.1.1", interface: "10.0.1.2")
+        ]
+        try enableWebAdministration(nodeID: topology.firstRouterNodeID, state: &state)
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .executePing(nodeID: topology.sourceNodeID, command: "ping 10.0.2.10")
+        )
+        XCTAssertEqual(state.lastPingEvent?.code, .pingRejectedSubnetMismatch)
+        XCTAssertEqual(state.lastPingFault?.code, "forwardingRouteMissing")
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(
+                nodeID: topology.firstRouterNodeID,
+                request: webAdministrationPOST(
+                    target: "/admin/actions/routes/add",
+                    fields: [
+                        "destinationNetwork": "10.0.2.0",
+                        "subnetMask": "255.255.255.0",
+                        "gatewayIPAddress": "10.0.1.2",
+                        "interfaceIPAddress": "10.0.1.1",
+                    ]
+                )
+            )
+        )
+
+        let installedRoute = manualRoute(
+            destination: "10.0.2.0",
+            gateway: "10.0.1.2",
+            interface: "10.0.1.1"
+        )
+        XCTAssertEqual(state.runtimeWebAdministrationResponsesByNodeID[topology.firstRouterNodeID]?.statusCode, 200)
+        XCTAssertEqual(state.runtimeManualRoutesByNodeID[topology.firstRouterNodeID], [installedRoute])
+        XCTAssertEqual(
+            state.networkRuntime.state.topologySnapshot.manualRoutesByNodeID[topology.firstRouterNodeID],
+            [installedRoute]
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .executePing(nodeID: topology.sourceNodeID, command: "ping 10.0.2.10")
+        )
+        XCTAssertEqual(state.lastPingEvent?.code, .pingSucceeded)
+        XCTAssertNil(state.lastPingFault)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(
+                nodeID: topology.firstRouterNodeID,
+                request: webAdministrationPOST(
+                    target: "/admin/actions/routes/delete",
+                    fields: ["id": "manual-0"]
+                )
+            )
+        )
+
+        XCTAssertEqual(state.runtimeWebAdministrationResponsesByNodeID[topology.firstRouterNodeID]?.statusCode, 200)
+        XCTAssertNil(state.runtimeManualRoutesByNodeID[topology.firstRouterNodeID])
+        XCTAssertNil(state.networkRuntime.state.topologySnapshot.manualRoutesByNodeID[topology.firstRouterNodeID])
+        XCTAssertEqual(state.simulationPhase, .running)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .executePing(nodeID: topology.sourceNodeID, command: "ping 10.0.2.10")
+        )
+        XCTAssertEqual(state.lastPingEvent?.code, .pingRejectedSubnetMismatch)
+        XCTAssertEqual(state.lastPingFault?.code, "forwardingRouteMissing")
+    }
+
+    func testWebAdministrationDHCPMutationUpdatesGatewayAndRejectsRouterTransactionally() throws {
+        var state = TopologyEditorState()
+        let gatewayID = addNode(kind: .gateway, at: CGPoint(x: 20, y: 20), to: &state)
+        let routerID = addNode(kind: .router, at: CGPoint(x: 180, y: 20), to: &state)
+        try enableWebAdministration(nodeID: gatewayID, state: &state)
+        try enableWebAdministration(nodeID: routerID, state: &state)
+        let request = webAdministrationPOST(
+            target: "/admin/actions/dhcp/update",
+            fields: [
+                "isActive": "true",
+                "lowerBoundIPAddress": "192.168.40.100",
+                "upperBoundIPAddress": "192.168.40.199",
+                "gatewayIPAddress": "192.168.40.1",
+                "dnsServerIPAddress": "192.168.40.53",
+                "usesOwnSettings": "false",
+            ]
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: gatewayID, request: request)
+        )
+        let gatewayConfiguration = try XCTUnwrap(state.runtimeDHCPServerConfigurationsByNodeID[gatewayID])
+        XCTAssertTrue(gatewayConfiguration.isActive)
+        XCTAssertEqual(gatewayConfiguration.lowerBoundIPAddress, "192.168.40.100")
+        XCTAssertEqual(gatewayConfiguration.upperBoundIPAddress, "192.168.40.199")
+        XCTAssertEqual(gatewayConfiguration.gatewayIPAddress, "192.168.40.1")
+        XCTAssertEqual(gatewayConfiguration.dnsServerIPAddress, "192.168.40.53")
+
+        let existingRouterConfiguration = TopologyDHCPServerConfiguration(
+            isActive: false,
+            lowerBoundIPAddress: "10.0.0.10",
+            upperBoundIPAddress: "10.0.0.20"
+        )
+        state.runtimeDHCPServerConfigurationsByNodeID[routerID] = existingRouterConfiguration
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: routerID, request: request)
+        )
+        XCTAssertEqual(state.runtimeDHCPServerConfigurationsByNodeID[routerID], existingRouterConfiguration)
+        XCTAssertEqual(state.runtimeWebAdministrationResponsesByNodeID[routerID]?.statusCode, 409)
+    }
+
+    func testRunningWebAdministrationDHCPEnableDisableAndPoolChangeApplyWithoutRestart() throws {
+        var state = TopologyEditorState()
+        let gatewayID = addNode(kind: .gateway, at: CGPoint(x: 20, y: 20), to: &state)
+        let clientID = addNode(kind: .pc, at: CGPoint(x: 220, y: 20), to: &state)
+        let gateway = try XCTUnwrap(state.graph.node(withID: gatewayID))
+        let lanPortID = try XCTUnwrap(gateway.ports.dropFirst().first?.id)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .startConnection(nodeID: gatewayID, portID: lanPortID)
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .completeConnection(nodeID: clientID, portID: nil)
+        )
+        XCTAssertNil(state.lastValidationError)
+        saveRuntimeConfiguration(
+            nodeID: clientID,
+            ipAddress: "192.168.0.20",
+            subnetMask: "255.255.255.0",
+            defaultGateway: "192.168.0.10",
+            state: &state
+        )
+        try enableWebAdministration(nodeID: gatewayID, state: &state)
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+        XCTAssertNil(state.networkRuntime.state.dhcpServerSocketIDsByNodeID[gatewayID])
+
+        let enableFirstPool = webAdministrationPOST(
+            target: "/admin/actions/dhcp/update",
+            fields: [
+                "isActive": "true",
+                "lowerBoundIPAddress": "192.168.0.100",
+                "upperBoundIPAddress": "192.168.0.100",
+                "gatewayIPAddress": "192.168.0.10",
+                "dnsServerIPAddress": "192.168.0.53",
+                "usesOwnSettings": "false",
+            ]
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: gatewayID, request: enableFirstPool)
+        )
+
+        XCTAssertEqual(state.runtimeWebAdministrationResponsesByNodeID[gatewayID]?.statusCode, 200)
+        let firstListenerSocketID = try XCTUnwrap(
+            state.networkRuntime.state.dhcpServerSocketIDsByNodeID[gatewayID]
+        )
+        XCTAssertEqual(
+            state.networkRuntime.state.topologySnapshot.dhcpServerConfigurationsByNodeID[gatewayID]?.lowerBoundIPAddress,
+            "192.168.0.100"
+        )
+        XCTAssertEqual(
+            try requestDHCPLease(clientNodeID: clientID, state: &state),
+            "192.168.0.100"
+        )
+        let clientMAC = try XCTUnwrap(
+            state.networkRuntime.networkInterfaces(nodeID: clientID).first?.macAddress
+        )
+        XCTAssertNotNil(state.networkRuntime.state.dhcpLeasesByIPAddress.values.first {
+            $0.clientMACAddress.caseInsensitiveCompare(clientMAC) == .orderedSame
+                && $0.ipAddress == "192.168.0.100"
+        })
+
+        let updateActivePool = webAdministrationPOST(
+            target: "/admin/actions/dhcp/update",
+            fields: [
+                "isActive": "true",
+                "lowerBoundIPAddress": "192.168.0.200",
+                "upperBoundIPAddress": "192.168.0.200",
+                "gatewayIPAddress": "192.168.0.10",
+                "dnsServerIPAddress": "192.168.0.53",
+                "usesOwnSettings": "false",
+            ]
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: gatewayID, request: updateActivePool)
+        )
+
+        XCTAssertEqual(
+            state.networkRuntime.state.dhcpServerSocketIDsByNodeID[gatewayID],
+            firstListenerSocketID,
+            "A pool-only edit must keep the active listener bound."
+        )
+        XCTAssertNotNil(state.networkRuntime.state.dhcpLeasesByIPAddress.values.first {
+            $0.clientMACAddress.caseInsensitiveCompare(clientMAC) == .orderedSame
+                && $0.ipAddress == "192.168.0.100"
+        }, "Committed leases survive configuration edits until the client rebinds or they expire.")
+        XCTAssertEqual(
+            try requestDHCPLease(clientNodeID: clientID, state: &state),
+            "192.168.0.200"
+        )
+        XCTAssertEqual(
+            state.networkRuntime.state.dhcpLeasesByIPAddress.values.filter {
+                $0.clientMACAddress.caseInsensitiveCompare(clientMAC) == .orderedSame
+            }.map(\.ipAddress),
+            ["192.168.0.200"],
+            "A successful client rebind replaces that client's retained lease."
+        )
+
+        let disable = webAdministrationPOST(
+            target: "/admin/actions/dhcp/update",
+            fields: [
+                "isActive": "false",
+                "lowerBoundIPAddress": "192.168.0.200",
+                "upperBoundIPAddress": "192.168.0.200",
+                "gatewayIPAddress": "192.168.0.10",
+                "dnsServerIPAddress": "192.168.0.53",
+                "usesOwnSettings": "false",
+            ]
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: gatewayID, request: disable)
+        )
+
+        XCTAssertNil(state.networkRuntime.state.dhcpServerSocketIDsByNodeID[gatewayID])
+        XCTAssertNil(state.networkRuntime.state.socketsByID[firstListenerSocketID])
+        XCTAssertNil(try discoverDHCPAddress(clientNodeID: clientID, state: &state))
+        XCTAssertNotNil(state.networkRuntime.state.dhcpLeasesByIPAddress.values.first {
+            $0.clientMACAddress.caseInsensitiveCompare(clientMAC) == .orderedSame
+                && $0.ipAddress == "192.168.0.200"
+        })
+
+        let reenableThirdPool = webAdministrationPOST(
+            target: "/admin/actions/dhcp/update",
+            fields: [
+                "isActive": "true",
+                "lowerBoundIPAddress": "192.168.0.210",
+                "upperBoundIPAddress": "192.168.0.210",
+                "gatewayIPAddress": "192.168.0.10",
+                "dnsServerIPAddress": "192.168.0.53",
+                "usesOwnSettings": "false",
+            ]
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: gatewayID, request: reenableThirdPool)
+        )
+
+        XCTAssertNotNil(state.networkRuntime.state.dhcpServerSocketIDsByNodeID[gatewayID])
+        XCTAssertEqual(try discoverDHCPAddress(clientNodeID: clientID, state: &state), "192.168.0.210")
+        XCTAssertEqual(state.simulationPhase, .running)
+    }
+
+    func testRunningWebAdministrationDHCPBindFailureRollsBackEditorAndRuntimeState() throws {
+        var state = TopologyEditorState()
+        let gatewayID = addNode(kind: .gateway, at: CGPoint(x: 20, y: 20), to: &state)
+        let originalConfiguration = TopologyDHCPServerConfiguration(
+            isActive: false,
+            lowerBoundIPAddress: "192.168.0.20",
+            upperBoundIPAddress: "192.168.0.29",
+            gatewayIPAddress: "192.168.0.10",
+            dnsServerIPAddress: "192.168.0.53"
+        )
+        state.runtimeDHCPServerConfigurationsByNodeID[gatewayID] = originalConfiguration
+        try enableWebAdministration(nodeID: gatewayID, state: &state)
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+        let listenerConflict = try XCTUnwrap(
+            state.networkRuntime.bindUDPSocket(
+                nodeID: gatewayID,
+                localPort: TopologyNetworkRuntimeEngine.dhcpServerPort,
+                localIPAddress: "192.168.0.10"
+            )
+        )
+        let revisionBeforeRequest = state.persistenceRevision
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(
+                nodeID: gatewayID,
+                request: webAdministrationPOST(
+                    target: "/admin/actions/dhcp/update",
+                    fields: [
+                        "isActive": "true",
+                        "lowerBoundIPAddress": "192.168.0.100",
+                        "upperBoundIPAddress": "192.168.0.109",
+                        "gatewayIPAddress": "192.168.0.10",
+                        "dnsServerIPAddress": "192.168.0.53",
+                        "usesOwnSettings": "false",
+                    ]
+                )
+            )
+        )
+
+        XCTAssertEqual(state.runtimeWebAdministrationResponsesByNodeID[gatewayID]?.statusCode, 409)
+        XCTAssertEqual(state.runtimeDHCPServerConfigurationsByNodeID[gatewayID], originalConfiguration)
+        XCTAssertEqual(
+            state.networkRuntime.state.topologySnapshot.dhcpServerConfigurationsByNodeID[gatewayID],
+            originalConfiguration
+        )
+        XCTAssertNotNil(state.networkRuntime.state.socketsByID[listenerConflict])
+        XCTAssertNil(state.networkRuntime.state.dhcpServerSocketIDsByNodeID[gatewayID])
+        XCTAssertEqual(state.persistenceRevision, revisionBeforeRequest)
+        XCTAssertEqual(state.lastRuntimeFault?.code, "webAdministrationHTTP409")
+        XCTAssertTrue(state.lastRuntimeFault?.message.contains("UDP port 67") == true)
+    }
+
+    func testWebAdministrationPortForwardMutationsAddDeleteAndRollback() throws {
+        var state = TopologyEditorState()
+        let gatewayID = addNode(kind: .gateway, at: CGPoint(x: 20, y: 20), to: &state)
+        try enableWebAdministration(nodeID: gatewayID, state: &state)
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+        let add = webAdministrationPOST(
+            target: "/admin/actions/nat/port-forwards/add",
+            fields: [
+                "id": "web",
+                "protocol": "tcp",
+                "publicPort": "8080",
+                "lanIPAddress": "192.168.50.10",
+                "lanPort": "80",
+            ]
+        )
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: gatewayID, request: add)
+        )
+        XCTAssertEqual(state.runtimePortForwardingRowsByNodeID[gatewayID]?.count, 1)
+        XCTAssertEqual(
+            state.networkRuntime.state.topologySnapshot.portForwardingRowsByNodeID[gatewayID]?.count,
+            1
+        )
+        XCTAssertEqual(
+            state.networkRuntime.natMappings(gatewayNodeID: gatewayID).filter { $0.type == .staticEntry }.count,
+            1
+        )
+
+        let committedRows = state.runtimePortForwardingRowsByNodeID[gatewayID]
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: gatewayID, request: add)
+        )
+        XCTAssertEqual(state.runtimePortForwardingRowsByNodeID[gatewayID], committedRows)
+        XCTAssertEqual(state.runtimeWebAdministrationResponsesByNodeID[gatewayID]?.statusCode, 409)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(
+                nodeID: gatewayID,
+                request: webAdministrationPOST(
+                    target: "/admin/actions/nat/port-forwards/delete",
+                    fields: ["id": "port-forward-0"]
+                )
+            )
+        )
+        XCTAssertNil(state.runtimePortForwardingRowsByNodeID[gatewayID])
+        XCTAssertTrue(state.networkRuntime.natMappings(gatewayNodeID: gatewayID).isEmpty)
+    }
+
+    func testWebAdministrationFirewallMutationsApplySettingsRulesDeletesAndRollback() throws {
+        var state = TopologyEditorState()
+        let routerID = addNode(kind: .router, at: CGPoint(x: 20, y: 20), to: &state)
+        try enableWebAdministration(nodeID: routerID, state: &state)
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(
+                nodeID: routerID,
+                request: webAdministrationPOST(
+                    target: "/admin/actions/firewall/update",
+                    fields: [
+                        "isActive": "true",
+                        "defaultPolicy": "drop",
+                        "dropsICMP": "true",
+                        "filtersSYNSegmentsOnly": "false",
+                        "filtersUDP": "true",
+                    ]
+                )
+            )
+        )
+        var configuration = try XCTUnwrap(state.runtimeFirewallConfigurationsByNodeID[routerID])
+        XCTAssertTrue(configuration.isActive)
+        XCTAssertEqual(configuration.defaultPolicy, .drop)
+        XCTAssertTrue(configuration.dropICMP)
+        XCTAssertFalse(configuration.filterSYNSegmentsOnly)
+        XCTAssertTrue(configuration.filterUDP)
+
+        let addRule = webAdministrationPOST(
+            target: "/admin/actions/firewall/rules/add",
+            fields: [
+                "id": "allow-dns",
+                "sourceIPAddress": "0.0.0.0",
+                "sourceSubnetMask": "0.0.0.0",
+                "destinationIPAddress": "192.168.1.53",
+                "destinationSubnetMask": "255.255.255.255",
+                "port": "53",
+                "protocol": "udp",
+                "action": "accept",
+            ]
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: routerID, request: addRule)
+        )
+        configuration = try XCTUnwrap(state.runtimeFirewallConfigurationsByNodeID[routerID])
+        XCTAssertEqual(configuration.rules.count, 1)
+        XCTAssertEqual(configuration.rules[0].protocolType, .udp)
+        XCTAssertEqual(configuration.rules[0].action, .accept)
+
+        let committedConfiguration = configuration
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(nodeID: routerID, request: addRule)
+        )
+        XCTAssertEqual(state.runtimeFirewallConfigurationsByNodeID[routerID], committedConfiguration)
+        XCTAssertEqual(state.runtimeWebAdministrationResponsesByNodeID[routerID]?.statusCode, 409)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(
+                nodeID: routerID,
+                request: webAdministrationPOST(
+                    target: "/admin/actions/firewall/rules/delete",
+                    fields: ["id": "rule-0"]
+                )
+            )
+        )
+        XCTAssertEqual(state.runtimeFirewallConfigurationsByNodeID[routerID]?.rules, [])
+    }
+
+    func testWebAdministrationClearNATMappingsAndValidationFailurePreserveConfiguration() throws {
+        var state = TopologyEditorState()
+        let gatewayID = addNode(kind: .gateway, at: CGPoint(x: 20, y: 20), to: &state)
+        try enableWebAdministration(nodeID: gatewayID, state: &state)
+        let existingRows = [TopologyGatewayPortForwardingRow(
+            protocolValue: "TCP",
+            publicPortValue: "443",
+            lanIPAddress: "192.168.1.10",
+            lanPortValue: "8443"
+        )]
+        state.runtimePortForwardingRowsByNodeID[gatewayID] = existingRows
+        TopologyEditorReducer.reduce(state: &state, action: .startSimulation)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(
+                nodeID: gatewayID,
+                request: webAdministrationPOST(
+                    target: "/admin/actions/nat/mappings/clear",
+                    fields: [:]
+                )
+            )
+        )
+        XCTAssertEqual(state.runtimePortForwardingRowsByNodeID[gatewayID], existingRows)
+        XCTAssertEqual(
+            state.networkRuntime.natMappings(gatewayNodeID: gatewayID).filter { $0.type == .staticEntry }.count,
+            1
+        )
+        XCTAssertEqual(state.runtimeWebAdministrationResponsesByNodeID[gatewayID]?.statusCode, 200)
+
+        let routesBefore = state.runtimeManualRoutesByNodeID
+        let dhcpBefore = state.runtimeDHCPServerConfigurationsByNodeID
+        let forwardsBefore = state.runtimePortForwardingRowsByNodeID
+        let firewallBefore = state.runtimeFirewallConfigurationsByNodeID
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .runtimeWebAdministrationRequest(
+                nodeID: gatewayID,
+                request: webAdministrationPOST(
+                    target: "/admin/actions/routes/add",
+                    fields: ["destinationNetwork": "invalid"]
+                )
+            )
+        )
+        XCTAssertEqual(state.runtimeManualRoutesByNodeID, routesBefore)
+        XCTAssertEqual(state.runtimeDHCPServerConfigurationsByNodeID, dhcpBefore)
+        XCTAssertEqual(state.runtimePortForwardingRowsByNodeID, forwardsBefore)
+        XCTAssertEqual(state.runtimeFirewallConfigurationsByNodeID, firewallBefore)
+        XCTAssertEqual(state.runtimeWebAdministrationResponsesByNodeID[gatewayID]?.statusCode, 400)
+        XCTAssertEqual(state.lastRuntimeFault?.code, "webAdministrationHTTP400")
+    }
+
+    func testWebAdministrationTerminalClearAndLastRevokeDisableAccessSafely() throws {
+        var state = TopologyEditorState()
+        let routerID = addNode(kind: .router, at: CGPoint(x: 20, y: 20), to: &state)
+        try enableWebAdministration(nodeID: routerID, state: &state)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .executePing(
+                nodeID: routerID,
+                command: "webadmin revoke 192.168.1.0 255.255.255.0"
+            )
+        )
+        XCTAssertEqual(
+            state.runtimeWebAdministrationConfigurationsByNodeID[routerID]?.accessPolicy,
+            TopologyRuntimeWebAdministrationAccessPolicy()
+        )
+        XCTAssertNil(state.lastRuntimeFault)
+
+        try enableWebAdministration(nodeID: routerID, state: &state)
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .executePing(nodeID: routerID, command: "webadmin clear")
+        )
+        XCTAssertEqual(
+            state.runtimeWebAdministrationConfigurationsByNodeID[routerID]?.accessPolicy,
+            TopologyRuntimeWebAdministrationAccessPolicy()
+        )
+        XCTAssertNil(state.lastRuntimeFault)
+    }
+
+    func testWebAdministrationTerminalCommandsRejectNonRouterGatewaySources() {
+        var state = TopologyEditorState()
+        let pcID = addNode(kind: .pc, at: CGPoint(x: 20, y: 20), to: &state)
+
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .executePing(nodeID: pcID, command: "webadmin on")
+        )
+
+        XCTAssertNil(state.runtimeWebAdministrationConfigurationsByNodeID[pcID])
+        XCTAssertEqual(state.lastRuntimeEvent?.code, .runtimeWebAdministrationRequestRejected)
+        XCTAssertEqual(state.lastRuntimeFault?.code, "webAdministrationUnsupportedForNodeKind")
+        XCTAssertTrue(
+            state.runtimeConsoleEntriesByNodeID[pcID]?.contains(where: {
+                $0.contains("Router and Gateway")
+            }) == true
+        )
+    }
+
+    private func enableWebAdministration(
+        nodeID: UUID,
+        sourceIPAddress: String = "192.168.1.10",
+        state: inout TopologyEditorState
+    ) throws {
+        let network = try TopologyRuntimeWebAdministrationIPv4Network(
+            networkAddress: "192.168.1.0",
+            subnetMask: "255.255.255.0"
+        )
+        TopologyEditorReducer.reduce(
+            state: &state,
+            action: .saveRuntimeWebAdministrationPolicy(
+                nodeID: nodeID,
+                policy: TopologyRuntimeWebAdministrationAccessPolicy(
+                    isEnabled: true,
+                    allowedSourceNetworks: [network]
+                )
+            )
+        )
+        XCTAssertEqual(
+            state.runtimeWebAdministrationConfigurationsByNodeID[nodeID]?.accessPolicy
+                .accessDecision(for: sourceIPAddress),
+            .allowed
+        )
+    }
+
+    private func discoverDHCPAddress(
+        clientNodeID: UUID,
+        state: inout TopologyEditorState
+    ) throws -> String? {
+        let clientInterface = try XCTUnwrap(
+            state.networkRuntime.networkInterfaces(nodeID: clientNodeID).first
+        )
+        let socketID = try XCTUnwrap(
+            state.networkRuntime.bindUDPSocket(
+                nodeID: clientNodeID,
+                localPort: TopologyNetworkRuntimeEngine.dhcpClientPort,
+                localIPAddress: clientInterface.ipAddress,
+                remoteIPAddress: TopologyNetworkRuntimeEngine.limitedBroadcastIPAddress,
+                remotePort: TopologyNetworkRuntimeEngine.dhcpServerPort
+            )
+        )
+        defer { state.networkRuntime.closeSocket(socketID: socketID) }
+        let discover = Data(
+            "DHCPDISCOVER\nyiaddr=0.0.0.0\nchaddr=\(clientInterface.macAddress)".utf8
+        )
+        _ = state.networkRuntime.sendUDP(socketID: socketID, payload: discover)
+        guard let offer = state.networkRuntime.receiveUDP(socketID: socketID),
+              let fields = dhcpFields(in: offer.datagram.payload),
+              fields.command == "DHCPOFFER"
+        else { return nil }
+        return fields.values["yiaddr"]
+    }
+
+    private func requestDHCPLease(
+        clientNodeID: UUID,
+        state: inout TopologyEditorState
+    ) throws -> String? {
+        let clientInterface = try XCTUnwrap(
+            state.networkRuntime.networkInterfaces(nodeID: clientNodeID).first
+        )
+        let socketID = try XCTUnwrap(
+            state.networkRuntime.bindUDPSocket(
+                nodeID: clientNodeID,
+                localPort: TopologyNetworkRuntimeEngine.dhcpClientPort,
+                localIPAddress: clientInterface.ipAddress,
+                remoteIPAddress: TopologyNetworkRuntimeEngine.limitedBroadcastIPAddress,
+                remotePort: TopologyNetworkRuntimeEngine.dhcpServerPort
+            )
+        )
+        defer { state.networkRuntime.closeSocket(socketID: socketID) }
+        let discover = Data(
+            "DHCPDISCOVER\nyiaddr=0.0.0.0\nchaddr=\(clientInterface.macAddress)".utf8
+        )
+        _ = state.networkRuntime.sendUDP(socketID: socketID, payload: discover)
+        let offer = try XCTUnwrap(state.networkRuntime.receiveUDP(socketID: socketID))
+        let offerFields = try XCTUnwrap(dhcpFields(in: offer.datagram.payload))
+        XCTAssertEqual(offerFields.command, "DHCPOFFER")
+        let offeredIPAddress = try XCTUnwrap(offerFields.values["yiaddr"])
+        let serverIdentifier = try XCTUnwrap(offerFields.values["serverident"])
+        let request = Data(
+            [
+                "DHCPREQUEST",
+                "yiaddr=0.0.0.0",
+                "chaddr=\(clientInterface.macAddress)",
+                "requested=\(offeredIPAddress)",
+                "serverident=\(serverIdentifier)",
+            ].joined(separator: "\n").utf8
+        )
+        _ = state.networkRuntime.sendUDP(socketID: socketID, payload: request)
+        let acknowledgement = try XCTUnwrap(state.networkRuntime.receiveUDP(socketID: socketID))
+        XCTAssertEqual(dhcpFields(in: acknowledgement.datagram.payload)?.command, "DHCPACK")
+        return offeredIPAddress
+    }
+
+    private func dhcpFields(in data: Data) -> (command: String, values: [String: String])? {
+        guard let payload = String(data: data, encoding: .utf8) else { return nil }
+        let lines = payload.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let command = lines.first else { return nil }
+        let values = lines.dropFirst().reduce(into: [String: String]()) { result, line in
+            let pair = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard pair.count == 2 else { return }
+            result[String(pair[0])] = String(pair[1])
+        }
+        return (command, values)
+    }
+
+    private func webAdministrationPOST(
+        target: String,
+        sourceIPAddress: String = "192.168.1.10",
+        fields: [String: String]
+    ) -> TopologyRuntimeWebAdministrationRequest {
+        TopologyRuntimeWebAdministrationRequest(
+            method: "POST",
+            target: target,
+            sourceIPAddress: sourceIPAddress,
+            formFields: fields
+        )
     }
 
     private func activateRuntimeProgram(

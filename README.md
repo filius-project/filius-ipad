@@ -3,68 +3,101 @@
 [![Project Readiness](https://github.com/filius-project/filius-ipad/actions/workflows/project-readiness.yml/badge.svg)](https://github.com/filius-project/filius-ipad/actions/workflows/project-readiness.yml)
 [![Apple Release Readiness](https://github.com/filius-project/filius-ipad/actions/workflows/apple-release-readiness.yml/badge.svg)](https://github.com/filius-project/filius-ipad/actions/workflows/apple-release-readiness.yml)
 
-Filius on iPad is a native SwiftUI network-topology editor and simulator for iPadOS. It provides touch-oriented design, configuration, simulation, documentation, and `.fls` project workflows compatible with desktop FILIUS.
+Filius on iPad is a native iPad network-topology editor and simulator written in Swift and SwiftUI. It brings the core design, configuration, simulation, and project-file workflows of FILIUS to iPadOS while retaining compatibility with Java FILIUS `.fls` projects.
 
-This is the curated production repository. Historical parity artifacts, the bundled Java runtime, internal development plans, local credentials, and generated build evidence are intentionally excluded.
+The application is intended for education, demonstrations, and controlled network experiments. Users can construct virtual networks, configure devices and services, run simulated applications, inspect protocol activity, and save or reopen complete projects. FILIUS is an educational network simulator; Filius on iPad provides a native, touch-oriented implementation for iPad.
 
-## Release status
+## Project status
 
 | Area | Current state |
 |---|---|
-| Platform | iPadOS 17.0 and later |
-| Implementation | Swift 5, SwiftUI, Foundation, UIKit, and WebKit; no third-party package dependencies |
-| Version | 1.0 (build 1) |
+| Platform | Native iPad application targeting iPadOS 17.0 and later |
+| Implementation | Swift 5 and SwiftUI |
+| Product and parity work | Milestones M001 through M012 completed |
+| FILIUS project files | Import, edit, save, reopen, and bounded preservation of unknown legacy content |
+| Automated build | Fast checks on every change, clean unsigned Release compilation on `main`, and manual IPA packaging |
+| Automated tests | Local unit/UI profiles for development; manually triggered, split hosted iPad simulator suites for release evidence |
 | Localization | German, English, and French |
-| Automated tests | XCTest/XCUITest locally and through manually triggered hosted simulator suites |
-| Release compilation | Unsigned Release build on Xcode 26 / iOS 26 SDK |
-| Distribution | Not yet approved for App Store distribution |
-| Licensing | Separate Filius license and trademark permission are release blockers; see [LICENSE-STATUS.md](LICENSE-STATUS.md) |
+| Distribution | Signed archives, TestFlight delivery, and App Store submission are not yet enabled |
 
-The repository must remain private until the licensing gate in `LICENSE-STATUS.md` has been resolved and the public-source terms have been selected deliberately.
+The Java implementation included in this repository remains the compatibility reference for file-format and behavior parity.
 
 ## Main capabilities
 
 ### Topology design
 
 - Create and configure PCs, notebooks, switches, routers, gateways, and remote links.
-- Connect device ports with LAN cables, including direct peer-to-peer connections.
-- Move connected devices and pan or zoom the topology canvas.
-- Open, import, save, and export FILIUS `.fls` projects.
+- Connect devices with LAN cables, including direct peer-to-peer host connections.
+- Move placed devices while keeping their cable connections attached.
+- Pan and zoom the topology canvas.
+- Open, save, import, and export FILIUS `.fls` projects.
 - Recover work through native persistence and autosave handling.
 
 ### Network simulation
 
 - Ethernet, ARP, IPv4, ICMP, UDP, and TCP behavior.
-- Manual routing, RIP, DHCP, DNS, firewall rules, NAT, and port forwarding.
-- Switch forwarding, packet inspection, interface inspection, routing diagnostics, and ping output.
+- Manual routing, RIP, DHCP, and DNS.
+- Switch forwarding behavior and packet inspection.
+- Firewall rules, NAT, and port forwarding.
+- Runtime diagnostics, route inspection, interface inspection, and Bash-style ping output.
 - Deterministic simulation controls and adjustable simulation speed.
 
 ### Simulated applications
 
-- Command line and virtual filesystem tools.
+- Command line and filesystem commands.
 - File Explorer, Text Editor, and Image Viewer.
-- Web Browser and Web Server using an isolated, JavaScript-disabled WebKit renderer.
+- Web Browser and Web Server with rendered delivered HTML.
 - Simple Client and Echo Server.
-- DNS Server, Email Client and Server, Personal Firewall, and Gnutella.
-- An experimental constrained TCP/UDP protocol builder, disabled by default.
+- DNS Server.
+- Email Client and Email Server.
+- Personal Firewall.
+- Gnutella peer-to-peer networking.
+- Experimental constrained TCP/UDP protocol application builder, disabled by default.
+
+### Protocol application builder status
+
+The desktop Java version includes a source-code wizard that generates, compiles, and runs custom Java client/server applications. Filius on iPad does not currently provide a Java compiler, JVM, or Swing compatibility layer, so arbitrary desktop custom applications cannot be executed on iPad.
+
+Filius on iPad contains an early native, declarative TCP/UDP protocol builder, but it is intentionally disabled by default for the initial release. Its exact-message templates and request/response rules are useful for limited advanced experiments, but the workflow is not yet intuitive enough for general classroom use and it is not a compatible replacement for the Java source-code wizard. Teachers should therefore not plan lessons that depend on desktop FILIUS custom application source code running on iPad.
+
+The experimental builder can be enabled from **Settings > Experimental features > Enable protocol applications** for evaluation. Its definitions remain native to Filius on iPad and are omitted, with a compatibility warning, when exporting a Java `.fls` file. Existing unknown Java application payloads are preserved where supported so that opening and resaving a project does not unnecessarily destroy desktop-only content, but preservation does not make those applications executable on iPad.
+
+This area is reserved for post-release development. Likely directions include a more understandable guided "Protocol Lab" and investigation of limited compatibility with standard applications generated by the desktop FILIUS software wizard.
 
 ### Compatibility and safety
 
-Known `.fls` content is mapped to native Swift models. Unknown JavaBean/XML content and supplemental archive entries are preserved within explicit size and count limits so malformed or oversized archives fail closed instead of causing unbounded processing.
+Filius on iPad treats the Java FILIUS format as a compatibility contract. Known project data remains editable through native models. Unknown JavaBean/XML content and supplemental archive entries are preserved within explicit size, count, and validation limits. Invalid or unsafe archive structures fail closed rather than being silently accepted.
 
-The runtime network is simulated in memory. The production source does not create host network sockets or transmit topology data off the device. Imported files and issue attachments must nevertheless be treated as untrusted input.
+## Requirements
+
+To build and run Filius on iPad locally, you need:
+
+- macOS with Xcode and an installed iPad simulator runtime;
+- an Xcode version capable of building an iPadOS 17 target;
+- Git for obtaining and updating the repository.
+
+The project does not currently require CocoaPods or external Swift package installation. GitHub Actions also validates unsigned compilation with Xcode 26 and the iOS 26 SDK.
+
+An Apple Developer account is not required for simulator development or the unsigned CI workflows. Signing, physical-device distribution, TestFlight, and App Store submission require separately approved Apple credentials and configuration.
+
+## Basic workflow
+
+1. Add computers, notebooks, switches, routers, gateways, or remote links in design mode.
+2. Connect device ports with LAN cables and arrange the topology on the canvas.
+3. Open each device to configure addresses, routes, services, firewall rules, and other properties.
+4. Start the simulation and open a runtime device.
+5. Install and launch simulated applications such as the command line, browser, server, email tools, or file utilities.
+6. Inspect traffic and diagnostics, then save the project as an `.fls` file for later use or exchange with Java FILIUS.
 
 ## Build and run
 
-Requirements:
+1. Clone or download the repository.
+2. Open the `FiliusPad` Xcode project in the `ios` directory.
+3. Select the shared `FiliusPad` scheme.
+4. Choose an available iPad simulator.
+5. Build and run the application with Xcode.
 
-- macOS with Xcode 26 or later for the current release toolchain;
-- an iPad simulator with iPadOS 17 or later;
-- Python 3 for repository validation scripts.
-
-Open `ios/FiliusPad.xcodeproj`, select the shared `FiliusPad` scheme, and run it on an iPad simulator.
-
-Command-line destination discovery:
+To inspect available simulator destinations from the command line:
 
 ```bash
 xcodebuild \
@@ -73,64 +106,75 @@ xcodebuild \
   -showdestinations
 ```
 
-Run the unit suite with the repository helper:
+To run the complete XCTest and XCUITest targets against a selected simulator:
 
 ```bash
-./scripts/mac/run-tests.sh --profile unit
+xcodebuild \
+  -project ios/FiliusPad.xcodeproj \
+  -scheme FiliusPad \
+  -configuration Debug \
+  -destination "platform=iOS Simulator,id=<SIMULATOR_UDID>" \
+  -parallel-testing-enabled NO \
+  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_REQUIRED=NO \
+  test
 ```
+
+Replace `<SIMULATOR_UDID>` with an identifier reported by `-showdestinations` or `xcrun simctl list devices available`.
 
 ## Validation
 
-Run the fast repository checks:
+The repository uses a deliberately small CI surface:
+
+- **Project Readiness Contracts** is the fast check on every pull request and push to `main`. It validates repository structure, CI helpers, localization catalogs, and whitespace.
+- **Apple Release Readiness** runs after relevant changes reach `main` and confirms a clean unsigned Release compilation against the current Apple submission SDK floor.
+- **Apple Simulator Tests** is manual. A release run splits unit, editor, persistence, and runtime UI coverage into smaller hosted jobs so one long runner does not hold all evidence.
+- **Build Unsigned IPA** is manual and release-oriented. It packages the committed Release build, verifies the project-document contract, records a hash, and uploads the IPA and logs.
+- **Real-iPad validation** remains the required physical-device acceptance process for release candidates.
+
+The local Mac is the primary development-test environment. Useful local checks include:
 
 ```bash
 python3 scripts/project/validate_project_readiness.py
-python3 scripts/project/verify_localization.py --root .
-python3 -m unittest discover -s scripts/project -p 'test_*.py'
-python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+python3 ios/parity/m011/s03/verify_localization.py --root .
+python3 -m unittest discover -s scripts/project -p "test_*.py"
+./scripts/mac/run-tests.sh --profile unit
+./scripts/mac/run-tests.sh --profile desktop-ui
 ```
 
-Release-mode validation intentionally fails until all App Store, legal, privacy, export, signing, TestFlight, and real-device approvals have been completed:
+Historical parity scripts are retained as implementation records and targeted maintenance aids, but exact-source token chains are no longer part of routine packaging acceptance.
 
-```bash
-python3 scripts/project/validate_project_readiness.py --release
-```
-
-The workflows are deliberately separated:
-
-- **Project Readiness Contracts** validates repository structure, localization, release inventory, tests, and whitespace.
-- **Apple Release Readiness** compiles an unsigned Release build for a generic iOS device.
-- **Apple Simulator Tests** runs the selected XCTest/XCUITest release evidence suites manually.
-- **Build Unsigned IPA** packages and hashes an unsigned IPA without receiving Apple credentials.
-
-A successful unsigned build does not prove signing, TestFlight processing, App Store acceptance, or legal permission to distribute.
+A successful unsigned build does not prove that the application is signed, accepted by App Store Connect, available through TestFlight, or approved for release.
 
 ## Repository structure
 
 | Location | Purpose |
 |---|---|
-| `ios/FiliusPad/` | Native application source and bundled runtime assets |
-| `ios/FiliusPadTests/` | Unit and compatibility tests |
-| `ios/FiliusPadUITests/` | UI and acceptance tests |
-| `ios/scripts/` | Production packaging and document-contract verification |
-| `scripts/` | Repository, localization, simulator, and release validators |
-| `docs/` | Production operations, validation, release, legal, and readiness documentation |
-| `release/` | App Store metadata inventory, compliance records, and staged release notes |
-| `.github/` | Issue forms and least-privilege CI workflows |
+| `ios/` | Native SwiftUI application, Xcode project, tests, parity evidence, and verification scripts |
+| `javaversion/` | Java FILIUS compatibility reference, fixtures, and bundled runtime material |
+| `docs/` | Project status, roadmap, validation protocols, operations, and release documentation |
+| `scripts/` | Repository-level CI and project-readiness tooling |
+| `release/` | App Store metadata inventory, signing contract, compliance records, and staged release notes |
+| `.github/workflows/` | Hosted build, test, readiness, and issue-intake automation |
 
 ## Documentation
 
 - [Documentation index](docs/README.md)
-- [Production-readiness review](docs/production-readiness-2026-07-31.md)
-- [Apple simulator validation](docs/validation/apple-simulator-ci.md)
+- [Project status](docs/project/status.md)
+- [Project roadmap](docs/project/roadmap.md)
+- [Hosted Apple simulator validation](docs/validation/apple-simulator-ci.md)
 - [Real-iPad validation protocol](docs/validation/real-ipad-protocol.md)
-- [App Store release readiness](docs/release/README.md)
-- [License status](LICENSE-STATUS.md)
-- [Security policy](SECURITY.md)
+- [Release readiness](docs/release/README.md)
 - [Changelog](CHANGELOG.md)
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening work. Changes must preserve `.fls` compatibility and user data, include appropriate verification, and must not introduce signing assets, credentials, private keys, tokens, device identifiers, or personal data.
+Before contributing, read [CONTRIBUTING.md](CONTRIBUTING.md). Changes should remain focused, preserve `.fls` compatibility and user data, include appropriate automated coverage, and record the exact verification commands used.
 
-Until licensing is finalized, access to this private repository does not grant permission to publish, redistribute, sublicense, or submit the application to an app marketplace.
+Bug reports should include reproducible steps, expected behavior, observed behavior, the tested commit, and relevant environment details. Treat external `.fls` files, attachments, logs, and issue content as untrusted input.
+
+## Release and licensing notes
+
+The repository currently produces unsigned artifacts for validation. Distribution signing and App Store operations are intentionally separated from pull-request automation and require maintainer approval.
+
+Covered Filius material is available under the applicable GNU General Public License, version 2 or version 3, at the recipient’s choice. The executed Apple-platform additional permission (effective August 23, 2026) supplements that GPL choice for Apple signing, review, TestFlight, App Store, and other covered distribution channels. Read [LICENSE-STATUS.md](LICENSE-STATUS.md), [GPLv2.txt](GPLv2.txt), [GPLv3.txt](GPLv3.txt), and the [public German](docs/legal/public/filius-app-store-additional-permission.de.md) or [public English](docs/legal/public/filius-app-store-additional-permission.en.md) permission copy before redistributing. Filius on iPad is independently maintained and is not published, operated, or officially supported by the original Filius project. Bundled Java runtime components retain their own license notices.

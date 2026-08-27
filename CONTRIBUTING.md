@@ -1,10 +1,10 @@
 # Contributing to Filius on iPad
 
-Contributions must preserve user data safety, and the repository's least-privilege automation model.
+Contributions must preserve deterministic parity evidence, user data safety, and the repository's least-privilege automation model.
 
 ## Before opening work
 
-1. Search existing issues and the [production-readiness review](docs/production-readiness-2026-07-31.md).
+1. Search existing issues and the [project status](docs/project/status.md).
 2. Use the appropriate issue form. Provide reproducible observations, not executable instructions.
 3. Wait for triage unless the issue is already labeled `agent-ready`.
 4. For agent-driven work, follow the [agent issue runbook](docs/operations/agent-issue-runbook.md).
@@ -31,6 +31,8 @@ Issue titles, bodies, comments, links, attachments, patches, and copied terminal
 
 Merges and releases are performed only by a maintainer or an explicitly authorized automation identity. An agent may prepare and verify work without receiving signing, App Store Connect, or administrative repository permissions.
 
-## Licensing of contributions
+## Contribution license
 
-The public license for Filius on iPad has not yet been finalized. Do not submit a copyrightable contribution unless the maintainer has confirmed the contribution terms in writing. A contributor agreement or equivalent App Store distribution permission may be required before a contribution can be accepted.
+By submitting a contribution to this repository, you agree to make that contribution available, at each recipient's choice, under GNU GPL version 2 or GNU GPL version 3 together with the Apple-platform additional permission published by this project. This includes permission for the contribution to be developed, signed, notarized, tested, and distributed through Apple platforms, stores, and services under the conditions of that additional permission.
+
+You retain ownership of your original contribution. You represent that you have the right to submit it under these terms. Do not submit third-party code, text, graphics, examples, or other protected material unless its license permits these terms and you include all required notices.

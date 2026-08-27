@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 private let javaEmailBodySentinels = ["&&00036&&", "&&00059&&", "&&00124&&", "&&00035&&"]
@@ -84,14 +85,15 @@ struct TopologyRuntimeEmailMessage: Codable, Equatable, Identifiable {
     var bcc: [TopologyRuntimeEmailAddress]
     var subject: String
     var body: String
+    var deliveryIdentity: String?
     var receivedAtMilliseconds: UInt64?
     var isNew: Bool
     var isMarkedForDeletion: Bool
     var isSent: Bool
 
-    init(id: UInt64 = 0, from: TopologyRuntimeEmailAddress, to: [TopologyRuntimeEmailAddress], cc: [TopologyRuntimeEmailAddress] = [], bcc: [TopologyRuntimeEmailAddress] = [], subject: String = "", body: String = "", receivedAtMilliseconds: UInt64? = nil, isNew: Bool = true, isMarkedForDeletion: Bool = false, isSent: Bool = false) {
+    init(id: UInt64 = 0, from: TopologyRuntimeEmailAddress, to: [TopologyRuntimeEmailAddress], cc: [TopologyRuntimeEmailAddress] = [], bcc: [TopologyRuntimeEmailAddress] = [], subject: String = "", body: String = "", deliveryIdentity: String? = nil, receivedAtMilliseconds: UInt64? = nil, isNew: Bool = true, isMarkedForDeletion: Bool = false, isSent: Bool = false) {
         self.id = id; self.from = from; self.to = to; self.cc = cc; self.bcc = bcc; self.subject = subject; self.body = body
-        self.receivedAtMilliseconds = receivedAtMilliseconds; self.isNew = isNew; self.isMarkedForDeletion = isMarkedForDeletion; self.isSent = isSent
+        self.deliveryIdentity = deliveryIdentity; self.receivedAtMilliseconds = receivedAtMilliseconds; self.isNew = isNew; self.isMarkedForDeletion = isMarkedForDeletion; self.isSent = isSent
     }
 
     var envelopeRecipients: [TopologyRuntimeEmailAddress] {
@@ -99,11 +101,18 @@ struct TopologyRuntimeEmailMessage: Codable, Equatable, Identifiable {
         return (to + cc + bcc).filter { seen.insert($0.normalizedMailAddress).inserted }
     }
 
-    var javaWireString: String {
+    var javaWireString: String { wireString(includingDeliveryIdentity: true) }
+
+    fileprivate var idempotencyPayloadString: String { wireString(includingDeliveryIdentity: false) }
+
+    private func wireString(includingDeliveryIdentity: Bool) -> String {
         var lines = ["From: \(from.javaString)"]
         if !to.isEmpty { lines.append("To: \(to.map(\.javaString).joined(separator: ", "))") }
         if !cc.isEmpty { lines.append("Cc: \(cc.map(\.javaString).joined(separator: ", "))") }
         if !subject.isEmpty { lines.append("Subject: \(subject.trimmingCharacters(in: .whitespacesAndNewlines))") }
+        if includingDeliveryIdentity, let deliveryIdentity {
+            lines.append("\(TopologyRuntimeEmailDeliveryIdentity.headerName): \(deliveryIdentity)")
+        }
         if let receivedAtMilliseconds { lines.append("Date Received: \(receivedAtMilliseconds)") }
         return lines.joined(separator: "\r\n") + "\r\n\r\n" + body
     }
@@ -114,6 +123,9 @@ struct TopologyRuntimeEmailMessage: Codable, Equatable, Identifiable {
         guard envelopeRecipients.count <= Self.maximumRecipients else { throw TopologyRuntimeEmailValidationError.tooManyRecipients }
         guard subject.count <= 256, !subject.unicodeScalars.contains(where: { CharacterSet.newlines.contains($0) }) else { throw TopologyRuntimeEmailValidationError.invalidSubject }
         guard body.lengthOfBytes(using: .utf8) <= Self.maximumBodyBytes, javaWireString.lengthOfBytes(using: .utf8) <= Self.maximumWireBytes else { throw TopologyRuntimeEmailValidationError.messageTooLarge }
+        guard deliveryIdentity == nil || TopologyRuntimeEmailDeliveryIdentity.isValid(deliveryIdentity!) else {
+            throw TopologyRuntimeEmailValidationError.invalidDeliveryIdentity
+        }
         try validateJavaEmailAddressField(from.javaString, label: "sender")
         for address in to + cc + bcc { try validateJavaEmailAddressField(address.javaString, label: "recipient") }
         try validateJavaEmailMessageField(subject, label: "subject")
@@ -123,7 +135,7 @@ struct TopologyRuntimeEmailMessage: Codable, Equatable, Identifiable {
     static func parseJavaWireString(_ value: String, id: UInt64 = 0) throws -> Self {
         let normalized = value.replacingOccurrences(of: "\r\n", with: "\n")
         let sections = normalized.components(separatedBy: "\n\n")
-        var sender: TopologyRuntimeEmailAddress?, to: [TopologyRuntimeEmailAddress] = [], cc: [TopologyRuntimeEmailAddress] = [], subject = ""
+        var sender: TopologyRuntimeEmailAddress?, to: [TopologyRuntimeEmailAddress] = [], cc: [TopologyRuntimeEmailAddress] = [], subject = "", deliveryIdentity: String?
         for line in sections.first?.components(separatedBy: "\n") ?? [] {
             let pair = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
             guard pair.count == 2 else { continue }
@@ -135,10 +147,58 @@ struct TopologyRuntimeEmailMessage: Codable, Equatable, Identifiable {
             else if key == "to" { to = try addresses(value) }
             else if key == "cc" { cc = try addresses(value) }
             else if key == "subject" { subject = value }
+            else if key == TopologyRuntimeEmailDeliveryIdentity.headerName.lowercased() { deliveryIdentity = value.lowercased() }
         }
         guard let sender else { throw TopologyRuntimeEmailValidationError.malformedMessage }
-        let message = Self(id: id, from: sender, to: to, cc: cc, subject: subject, body: sections.dropFirst().joined(separator: "\n\n"))
+        let message = Self(id: id, from: sender, to: to, cc: cc, subject: subject, body: sections.dropFirst().joined(separator: "\n\n"), deliveryIdentity: deliveryIdentity)
         try message.validate(requireRecipients: false); return message
+    }
+}
+
+enum TopologyRuntimeEmailDeliveryIdentity {
+    static let headerName = "X-FiliusPad-Delivery-ID"
+    private static let version = "filiuspad-email-delivery-v1"
+
+    static func make(
+        originNodeID: UUID,
+        messageID: UInt64,
+        message: TopologyRuntimeEmailMessage
+    ) -> String {
+        digest(
+            fields: [
+                version,
+                originNodeID.uuidString.lowercased(),
+                String(messageID),
+                message.idempotencyPayloadString,
+            ] + message.envelopeRecipients.map(\.normalizedMailAddress)
+        )
+    }
+
+    static func contentSignature(
+        message: TopologyRuntimeEmailMessage,
+        recipients: [TopologyRuntimeEmailAddress]
+    ) -> String {
+        digest(
+            fields: [version, message.idempotencyPayloadString]
+                + recipients.map(\.normalizedMailAddress)
+        )
+    }
+
+    static func isValid(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy {
+            ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+        }
+    }
+
+    private static func digest(fields: [String]) -> String {
+        var input = Data()
+        for field in fields {
+            let bytes = Data(field.utf8)
+            var length = UInt64(bytes.count).bigEndian
+            withUnsafeBytes(of: &length) { input.append(contentsOf: $0) }
+            input.append(bytes)
+        }
+        return SHA256.hash(data: input).map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -205,10 +265,17 @@ struct TopologyRuntimeEmailServerAccount: Codable, Equatable {
     static func validatePassword(_ value: String) throws { guard !value.isEmpty, value.count <= 256, !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { throw TopologyRuntimeEmailValidationError.invalidPassword } }
 }
 
+struct TopologyRuntimeEmailDeliveryReceipt: Codable, Equatable {
+    let identity: String
+    let contentSignature: String
+}
+
 struct TopologyRuntimeEmailServerConfiguration: Codable, Equatable {
     static let smtpPort = 25
+    static let maximumDeliveryReceipts = 10_000
     var domain: String; var pop3Port: Int; var accounts: [TopologyRuntimeEmailServerAccount]; var nextMessageID: UInt64
-    init(domain: String = "filius.de", pop3Port: Int = 110, accounts: [TopologyRuntimeEmailServerAccount] = [], nextMessageID: UInt64 = 1) { self.domain = domain.lowercased(); self.pop3Port = pop3Port; self.accounts = accounts; self.nextMessageID = nextMessageID }
+    var deliveryReceipts: [TopologyRuntimeEmailDeliveryReceipt]?
+    init(domain: String = "filius.de", pop3Port: Int = 110, accounts: [TopologyRuntimeEmailServerAccount] = [], nextMessageID: UInt64 = 1, deliveryReceipts: [TopologyRuntimeEmailDeliveryReceipt]? = nil) { self.domain = domain.lowercased(); self.pop3Port = pop3Port; self.accounts = accounts; self.nextMessageID = nextMessageID; self.deliveryReceipts = deliveryReceipts }
     func validate() throws {
         guard TopologyRuntimeEmailAddress.isValidDomain(domain), domain == domain.lowercased() else { throw TopologyRuntimeEmailValidationError.invalidDomain(domain) }
         try TopologyRuntimeEmailClientConfiguration.validatePort(pop3Port); guard accounts.count <= 100 else { throw TopologyRuntimeEmailValidationError.tooManyAccounts }
@@ -218,6 +285,34 @@ struct TopologyRuntimeEmailServerConfiguration: Codable, Equatable {
             maximumID = max(maximumID, account.mailbox.map(\.id).max() ?? 0)
         }
         guard nextMessageID > maximumID else { throw TopologyRuntimeEmailValidationError.invalidMessageIDs }
+        let receipts = deliveryReceipts ?? []
+        guard receipts.count <= Self.maximumDeliveryReceipts,
+              receipts.allSatisfy({
+                  TopologyRuntimeEmailDeliveryIdentity.isValid($0.identity)
+                      && TopologyRuntimeEmailDeliveryIdentity.isValid($0.contentSignature)
+              }),
+              Set(receipts.map(\.identity)).count == receipts.count
+        else { throw TopologyRuntimeEmailValidationError.invalidDeliveryReceipts }
+    }
+
+    func deliveryReceipt(identity: String) -> TopologyRuntimeEmailDeliveryReceipt? {
+        deliveryReceipts?.first { $0.identity == identity }
+    }
+
+    mutating func appendDeliveryReceipt(_ receipt: TopologyRuntimeEmailDeliveryReceipt) throws {
+        if let existing = deliveryReceipt(identity: receipt.identity) {
+            guard existing == receipt else { throw TopologyRuntimeEmailValidationError.deliveryIdentityConflict }
+            return
+        }
+        // Persisted order is oldest-to-newest. Retain the most recent identities so a
+        // lost final SMTP response can still be retried without duplicating delivery.
+        var receipts = deliveryReceipts ?? []
+        if receipts.count >= Self.maximumDeliveryReceipts {
+            let evictionCount = receipts.count - Self.maximumDeliveryReceipts + 1
+            receipts.removeFirst(evictionCount)
+        }
+        receipts.append(receipt)
+        deliveryReceipts = receipts
     }
     func accountIndex(username: String) -> Int? { accounts.firstIndex { $0.username.caseInsensitiveCompare(username) == .orderedSame } }
     func accountIndex(email: String) -> Int? { accounts.firstIndex { $0.emailAddress(domain: domain).normalizedMailAddress == email.lowercased() } }
@@ -226,6 +321,7 @@ struct TopologyRuntimeEmailServerConfiguration: Codable, Equatable {
 enum TopologyRuntimeEmailValidationError: Error, Equatable, LocalizedError {
     case invalidAddress(String), invalidHost(String), invalidPort(Int), invalidDomain(String), invalidAccount(String), invalidPassword
     case duplicateAccount(String), tooManyAccounts, missingRecipient, tooManyRecipients, invalidSubject, messageTooLarge, mailboxQuotaExceeded, invalidMessageIDs, malformedMessage
+    case invalidDeliveryIdentity, invalidDeliveryReceipts, deliveryIdentityConflict
     case javaStorageIncompatible(String)
     var errorDescription: String? {
         switch self {
@@ -234,6 +330,9 @@ enum TopologyRuntimeEmailValidationError: Error, Equatable, LocalizedError {
         case let .duplicateAccount(v): return "Duplicate email account: \(v)"; case .tooManyAccounts: return "Too many email accounts."; case .missingRecipient: return "At least one recipient is required."
         case .tooManyRecipients: return "Too many email recipients."; case .invalidSubject: return "Invalid email subject."; case .messageTooLarge: return "Email message is too large."
         case .mailboxQuotaExceeded: return "Email mailbox quota exceeded."; case .invalidMessageIDs: return "Email message IDs are not deterministic."; case .malformedMessage: return "Malformed email message."
+        case .invalidDeliveryIdentity: return "Invalid email delivery identity."
+        case .invalidDeliveryReceipts: return "Invalid email delivery receipts."
+        case .deliveryIdentityConflict: return "Email delivery identity conflicts with previously accepted content."
         case let .javaStorageIncompatible(field): return "Email field is not representable in Java storage: \(field)."
         }
     }
@@ -248,6 +347,9 @@ struct TopologyRuntimeEmailServerProcessState: Equatable {
     var isRunning = false; var smtpListenerSocketID: UUID?; var pop3ListenerSocketID: UUID?
     fileprivate var smtpSessions: [UUID: EmailSMTPSession] = [:]; fileprivate var pop3Sessions: [UUID: EmailPOP3Session] = [:]
     var nextLogID: UInt64 = 1; var logs: [TopologyRuntimeEmailLogEntry] = []
+#if targetEnvironment(simulator)
+    var testingSMTPFinalDataResponsesToDrop = 0
+#endif
     mutating func append(_ time: UInt64, _ proto: String, _ direction: String, _ message: String) { logs.append(.init(id: nextLogID, timestampMilliseconds: time, protocolName: proto, direction: direction, message: message)); nextLogID &+= 1; if logs.count > 100 { logs.removeFirst(logs.count - 100) } }
 }
 
@@ -263,6 +365,17 @@ enum TopologyRuntimeEmailOperationError: Error, Equatable, LocalizedError {
 private struct EmailRelayRequest {
     let message: TopologyRuntimeEmailMessage
     let recipients: [TopologyRuntimeEmailAddress]
+}
+
+private struct EmailMXEndpoint: Equatable {
+    let preferenceOrder: Int
+    let exchangerHostname: String
+    let address: String
+}
+
+private struct EmailMXResolution {
+    let endpoints: [EmailMXEndpoint]
+    let diagnostics: [String]
 }
 
 private struct EmailOutcome {
@@ -629,6 +742,30 @@ extension TopologyEditorState {
                     process.smtpSessions[socket] = session
                     process.append(networkRuntime.state.currentTimeMilliseconds, "SMTP", "local", outcome.log)
 
+                    if !outcome.relays.isEmpty {
+                        runtimeEmailServerConfigurationsByNodeID[nodeID] = config
+                        runtimeEmailServerProcessesByNodeID[nodeID] = process
+                        var relayFailed = false
+                        for relay in outcome.relays {
+                            switch relayRuntimeEmail(fromNodeID: nodeID, request: relay) {
+                            case let .success(detail):
+                                process.append(
+                                    networkRuntime.state.currentTimeMilliseconds,
+                                    "SMTP",
+                                    "outbound",
+                                    "Remote delivery succeeded: \(detail)"
+                                )
+                            case let .failure(error):
+                                relayFailed = true
+                                process.append(networkRuntime.state.currentTimeMilliseconds, "SMTP", "outbound", "Remote delivery failed: \(error.localizedDescription)")
+                            }
+                        }
+                        if relayFailed {
+                            config = configurationBeforeCommand
+                            outcome.response = "451 Requested action aborted: relay unavailable\r\n"
+                        }
+                    }
+
                     if config != configurationBeforeCommand {
                         runtimeEmailServerConfigurationsByNodeID[nodeID] = config
                         do {
@@ -636,39 +773,28 @@ extension TopologyEditorState {
                         } catch {
                             config = configurationBeforeCommand
                             runtimeEmailServerConfigurationsByNodeID[nodeID] = configurationBeforeCommand
-                            outcome.relays.removeAll()
                             outcome.response = "452 Insufficient storage\r\n"
                             process.append(networkRuntime.state.currentTimeMilliseconds, "SMTP", "local", "Mailbox persistence rejected by quota")
                         }
                     }
 
-                    if !outcome.relays.isEmpty {
-                        runtimeEmailServerConfigurationsByNodeID[nodeID] = config
-                        runtimeEmailServerProcessesByNodeID[nodeID] = process
-                        var relayFailed = false
-                        for relay in outcome.relays {
-                            switch relayRuntimeEmail(fromNodeID: nodeID, request: relay) {
-                            case .success:
-                                process.append(networkRuntime.state.currentTimeMilliseconds, "SMTP", "outbound", "Remote delivery succeeded")
-                            case let .failure(error):
-                                relayFailed = true
-                                process.append(networkRuntime.state.currentTimeMilliseconds, "SMTP", "outbound", "Remote delivery failed: \(error.localizedDescription)")
-                            }
+                    if let response = outcome.response {
+                        var dropAcceptedDataResponse = false
+                        let isAcceptedDataResponse = response.hasPrefix("250")
+                            && outcome.log.hasPrefix("SMTP ")
+                            && outcome.log.contains("delivery")
+#if targetEnvironment(simulator)
+                        if isAcceptedDataResponse && process.testingSMTPFinalDataResponsesToDrop > 0 {
+                            process.testingSMTPFinalDataResponsesToDrop -= 1
+                            dropAcceptedDataResponse = true
+                            process.append(networkRuntime.state.currentTimeMilliseconds, "SMTP", "outbound", "Response 250 intentionally dropped after durable acceptance")
                         }
-                        if relayFailed {
-                            if config != configurationBeforeCommand {
-                                config = configurationBeforeCommand
-                                runtimeEmailServerConfigurationsByNodeID[nodeID] = configurationBeforeCommand
-                                do {
-                                    try persistRuntimeEmailServerConfiguration(nodeID: nodeID)
-                                } catch {
-                                    process.append(networkRuntime.state.currentTimeMilliseconds, "SMTP", "local", "Mailbox rollback persistence failed")
-                                }
-                            }
-                            outcome.response = "451 Requested action aborted: relay unavailable\r\n"
+#endif
+                        if !dropAcceptedDataResponse {
+                            sendEmailResponse(nodeID, socket, "SMTP", response, &process)
+                            count += 1
                         }
                     }
-                    if let response = outcome.response { sendEmailResponse(nodeID, socket, "SMTP", response, &process); count += 1 }
                     if outcome.close { networkRuntime.closeTCPSocket(socketID: socket); process.smtpSessions.removeValue(forKey: socket); break }
                 }
             }
@@ -731,6 +857,13 @@ extension TopologyEditorState {
                 persistedMessage.id = candidate.nextMessageID
                 candidate.nextMessageID += 1
             }
+            if persistedMessage.deliveryIdentity == nil {
+                persistedMessage.deliveryIdentity = TopologyRuntimeEmailDeliveryIdentity.make(
+                    originNodeID: nodeID,
+                    messageID: persistedMessage.id,
+                    message: persistedMessage
+                )
+            }
             persistedMessage.isNew = false
             persistedMessage.isSent = true
             persistedMessage.isMarkedForDeletion = false
@@ -756,9 +889,9 @@ extension TopologyEditorState {
             let address = try resolveEmailHost(nodeID, config.smtpHost), socket = try openEmailSocket(nodeID, address, config.smtpPort)
             defer { _ = networkRuntime.closeTCPConnectionAndClean(socketID: socket) }
             guard try emailResponse(socket, pump: true).hasPrefix("220") else { throw TopologyRuntimeEmailOperationError.malformedResponse }
-            try smtp("HELO filius", "250", socket); try smtp("MAIL FROM:<\(message.from.mailAddress)>", "250", socket)
-            for recipient in message.envelopeRecipients { try smtp("RCPT TO:<\(recipient.mailAddress)>", "250", socket) }
-            try smtp("DATA", "354", socket); try sendEmailPayload(stuffDots(message.javaWireString) + "\r\n.\r\n", socket, "SMTP", "message")
+            try smtp("HELO filius", "250", socket); try smtp("MAIL FROM:<\(prepared.message.from.mailAddress)>", "250", socket)
+            for recipient in prepared.message.envelopeRecipients { try smtp("RCPT TO:<\(recipient.mailAddress)>", "250", socket) }
+            try smtp("DATA", "354", socket); try sendEmailPayload(stuffDots(prepared.message.javaWireString) + "\r\n.\r\n", socket, "SMTP", "message")
             let queued = try emailResponse(socket, pump: true); guard queued.hasPrefix("250") else { throw TopologyRuntimeEmailOperationError.protocolError(queued.trimmingCharacters(in: .whitespacesAndNewlines)) }
             try? smtp("QUIT", "221", socket)
             runtimeEmailClientConfigurationsByNodeID[nodeID] = prepared.configuration
@@ -874,42 +1007,218 @@ extension TopologyEditorState {
         return text
     }
 
+    private mutating func resolveRuntimeEmailMXEndpoints(
+        fromNodeID nodeID: UUID,
+        recipientDomain domain: String
+    ) throws -> EmailMXResolution {
+        let normalizedDomain = domain.lowercased()
+        let mxResult = resolveRuntimeDNSQuestion(
+            nodeID: nodeID,
+            hostname: normalizedDomain,
+            recordType: .mailExchange
+        )
+        guard case let .success(mxAnswer) = mxResult else {
+            throw TopologyRuntimeEmailOperationError.dnsFailure(
+                "MX \(normalizedDomain): \(runtimeEmailDNSDiagnostic(mxResult))"
+            )
+        }
+
+        var seenExchangers = Set<TopologyDNSName>()
+        let exchangers = mxAnswer.records.compactMap { record -> TopologyDNSName? in
+            guard record.name == mxAnswer.question.name,
+                  case let .mailExchange(exchanger) = record.data,
+                  seenExchangers.insert(exchanger).inserted
+            else { return nil }
+            return exchanger
+        }
+        guard !exchangers.isEmpty else {
+            throw TopologyRuntimeEmailOperationError.dnsFailure(
+                "MX \(normalizedDomain): resolver returned no exchanger records"
+            )
+        }
+
+        var endpoints: [EmailMXEndpoint] = []
+        var diagnostics: [String] = []
+        for (preferenceOrder, exchanger) in exchangers.enumerated() {
+            var seenAddresses = Set<String>()
+            var addresses = mxAnswer.records.compactMap { record -> String? in
+                guard record.name == exchanger,
+                      case let .address(address) = record.data,
+                      seenAddresses.insert(address.rawValue).inserted
+                else { return nil }
+                return address.rawValue
+            }
+            if addresses.isEmpty {
+                let addressResult = resolveRuntimeDNSQuestion(
+                    nodeID: nodeID,
+                    hostname: exchanger.rawValue,
+                    recordType: .address
+                )
+                guard case let .success(addressAnswer) = addressResult else {
+                    diagnostics.append(
+                        "order=\(preferenceOrder),exchange=\(exchanger.rawValue),A=\(runtimeEmailDNSDiagnostic(addressResult))"
+                    )
+                    continue
+                }
+                addresses = addressAnswer.records.compactMap { record -> String? in
+                    guard record.name == exchanger,
+                          case let .address(address) = record.data,
+                          seenAddresses.insert(address.rawValue).inserted
+                    else { return nil }
+                    return address.rawValue
+                }
+            }
+            guard !addresses.isEmpty else {
+                diagnostics.append(
+                    "order=\(preferenceOrder),exchange=\(exchanger.rawValue),A=no-address-records"
+                )
+                continue
+            }
+            endpoints.append(contentsOf: addresses.map {
+                EmailMXEndpoint(
+                    preferenceOrder: preferenceOrder,
+                    exchangerHostname: exchanger.rawValue,
+                    address: $0
+                )
+            })
+        }
+
+        guard !endpoints.isEmpty else {
+            let detail = diagnostics.isEmpty ? "no exchanger addresses" : diagnostics.joined(separator: "; ")
+            throw TopologyRuntimeEmailOperationError.dnsFailure(
+                "MX \(normalizedDomain) has no routable exchanger A records: \(detail)"
+            )
+        }
+        return EmailMXResolution(endpoints: endpoints, diagnostics: diagnostics)
+    }
+
+    private func runtimeEmailDNSDiagnostic(_ result: TopologyDNSResolverResult) -> String {
+        let trace = result.trace.consultedServerIPAddresses.isEmpty
+            ? "none"
+            : result.trace.consultedServerIPAddresses.joined(separator: "->")
+        switch result {
+        case .success(let answer):
+            return "success(server=\(answer.respondingServerIPAddress),records=\(answer.records.count),consulted=\(trace))"
+        case .nameError(let question, _):
+            return "name-error(name=\(question.name.rawValue),consulted=\(trace))"
+        case .noData(let question, _):
+            return "no-data(name=\(question.name.rawValue),type=\(question.type.rawValue),consulted=\(trace))"
+        case .failure(let failure, _):
+            return "failure(\(runtimeEmailDNSFailureDiagnostic(failure)),consulted=\(trace))"
+        }
+    }
+
+    private func runtimeEmailDNSFailureDiagnostic(_ failure: TopologyDNSResolutionFailure) -> String {
+        switch failure {
+        case .invalidStartingServerAddress(let address):
+            return "invalid-starting-server=\(address)"
+        case .serverUnavailable(let address):
+            return "server-unavailable=\(address)"
+        case .serverTimedOut(let address):
+            return "server-timed-out=\(address)"
+        case .referralMissingAddress(let nameServer):
+            return "referral-missing-address=\(nameServer)"
+        case .loopDetected(let serverIPAddress):
+            return "loop-detected=\(serverIPAddress)"
+        case .hopLimitExceeded(let limit):
+            return "hop-limit=\(limit)"
+        case .responseLimitExceeded(let limit):
+            return "response-limit=\(limit)"
+        case .responseRecordLimitExceeded(let serverIPAddress, let limit):
+            return "record-limit=\(limit)@\(serverIPAddress)"
+        }
+    }
+
     private mutating func relayRuntimeEmail(
         fromNodeID nodeID: UUID,
         request: EmailRelayRequest
-    ) -> Result<Void, TopologyRuntimeEmailOperationError> {
+    ) -> Result<String, TopologyRuntimeEmailOperationError> {
         guard let domain = request.recipients.first?.mailAddress.split(separator: "@").last.map(String.init),
               request.recipients.allSatisfy({ $0.mailAddress.lowercased().hasSuffix("@\(domain.lowercased())") })
         else { return .failure(.validation("Remote relay recipients must share one domain.")) }
+
         do {
-            let address = try resolveEmailHost(nodeID, domain.lowercased())
-            guard !networkRuntime.networkInterfaces(nodeID: nodeID).contains(where: { $0.ipAddress == address }) else {
-                throw TopologyRuntimeEmailOperationError.protocolError("Relay target resolves to the sending server.")
+            let normalizedDomain = domain.lowercased()
+            let resolution = try resolveRuntimeEmailMXEndpoints(
+                fromNodeID: nodeID,
+                recipientDomain: normalizedDomain
+            )
+            var attempts = resolution.diagnostics
+
+            for endpoint in resolution.endpoints {
+                let route = "order=\(endpoint.preferenceOrder),exchange=\(endpoint.exchangerHostname),address=\(endpoint.address)"
+                guard !networkRuntime.networkInterfaces(nodeID: nodeID).contains(where: { $0.ipAddress == endpoint.address }) else {
+                    attempts.append("\(route),failure=resolved-to-sending-server")
+                    continue
+                }
+
+                var submissionAttempt = 0
+                while submissionAttempt < 2 {
+                    var messageBodySubmitted = false
+                    do {
+                        let socket = try openEmailSocket(
+                            nodeID,
+                            endpoint.address,
+                            TopologyRuntimeEmailServerConfiguration.smtpPort
+                        )
+                        defer { _ = networkRuntime.closeTCPConnectionAndClean(socketID: socket) }
+                        guard try emailResponse(socket, pump: true).hasPrefix("220") else {
+                            throw TopologyRuntimeEmailOperationError.malformedResponse
+                        }
+                        try smtp("HELO \(normalizedDomain)", "250", socket)
+                        try smtp("MAIL FROM:<\(request.message.from.mailAddress)>", "250", socket)
+                        for recipient in request.recipients {
+                            try smtp("RCPT TO:<\(recipient.mailAddress)>", "250", socket)
+                        }
+                        try smtp("DATA", "354", socket)
+                        messageBodySubmitted = true
+                        try sendEmailPayload(
+                            stuffDots(request.message.javaWireString) + "\r\n.\r\n",
+                            socket,
+                            "SMTP",
+                            "message"
+                        )
+                        let queued = try emailResponse(socket, pump: true)
+                        guard queued.hasPrefix("250") else {
+                            throw TopologyRuntimeEmailOperationError.protocolError(
+                                queued.trimmingCharacters(in: .whitespacesAndNewlines)
+                            )
+                        }
+                        try? smtp("QUIT", "221", socket)
+                        let precedingAttempts = attempts.isEmpty
+                            ? "none"
+                            : attempts.joined(separator: "; ")
+                        return .success(
+                            "domain=\(normalizedDomain),\(route),idempotentRetries=\(submissionAttempt),fallbacks=\(precedingAttempts)"
+                        )
+                    } catch {
+                        let operationError: TopologyRuntimeEmailOperationError = error as? TopologyRuntimeEmailOperationError
+                            ?? .protocolError(error.localizedDescription)
+                        let attempt = "\(route),submission=\(submissionAttempt + 1),failure=\(operationError.localizedDescription)"
+                        attempts.append(attempt)
+                        guard messageBodySubmitted else { break }
+                        if request.message.deliveryIdentity != nil, submissionAttempt == 0 {
+                            submissionAttempt += 1
+                            attempts.append("\(route),action=idempotent-retry-same-endpoint")
+                            continue
+                        }
+                        return .failure(.protocolError(
+                            "MX relay outcome is uncertain after message submission; fallback suppressed; \(attempts.joined(separator: "; "))"
+                        ))
+                    }
+                }
             }
-            let socket = try openEmailSocket(nodeID, address, TopologyRuntimeEmailServerConfiguration.smtpPort)
-            defer { _ = networkRuntime.closeTCPConnectionAndClean(socketID: socket) }
-            guard try emailResponse(socket, pump: true).hasPrefix("220") else {
-                throw TopologyRuntimeEmailOperationError.malformedResponse
-            }
-            try smtp("HELO \(domain.lowercased())", "250", socket)
-            try smtp("MAIL FROM:<\(request.message.from.mailAddress)>", "250", socket)
-            for recipient in request.recipients {
-                try smtp("RCPT TO:<\(recipient.mailAddress)>", "250", socket)
-            }
-            try smtp("DATA", "354", socket)
-            try sendEmailPayload(stuffDots(request.message.javaWireString) + "\r\n.\r\n", socket, "SMTP", "message")
-            let queued = try emailResponse(socket, pump: true)
-            guard queued.hasPrefix("250") else {
-                throw TopologyRuntimeEmailOperationError.protocolError(queued.trimmingCharacters(in: .whitespacesAndNewlines))
-            }
-            try? smtp("QUIT", "221", socket)
-            return .success(())
+
+            return .failure(.unreachable(
+                "MX routes for \(normalizedDomain) exhausted: \(attempts.joined(separator: "; "))"
+            ))
         } catch let error as TopologyRuntimeEmailOperationError {
             return .failure(error)
         } catch {
             return .failure(.protocolError(error.localizedDescription))
         }
     }
+
 }
 
 private extension Result where Success == String, Failure == TopologyRuntimeEmailOperationError {
@@ -951,6 +1260,29 @@ private func handleSMTP(_ data: Data, _ session: inout EmailSMTPSession, _ confi
             guard localIndexes.count == localRecipients.count else {
                 return .init(response: "550 No such user here\r\n", log: "SMTP unknown local recipient")
             }
+            let deliveryReceipt = message.deliveryIdentity.map {
+                TopologyRuntimeEmailDeliveryReceipt(
+                    identity: $0,
+                    contentSignature: TopologyRuntimeEmailDeliveryIdentity.contentSignature(
+                        message: message,
+                        recipients: recipientAddresses
+                    )
+                )
+            }
+            if let deliveryReceipt,
+               let existingReceipt = config.deliveryReceipt(identity: deliveryReceipt.identity)
+            {
+                guard existingReceipt == deliveryReceipt else {
+                    return .init(
+                        response: "554 Delivery identity conflicts with previously accepted content\r\n",
+                        log: "SMTP delivery identity conflict"
+                    )
+                }
+                return .init(
+                    response: "250 Message already accepted for delivery\r\n",
+                    log: "SMTP duplicate delivery suppressed"
+                )
+            }
             guard localIndexes.allSatisfy({ config.accounts[$0].mailbox.count < TopologyRuntimeEmailServerAccount.maximumMailboxMessages }) else {
                 return .init(response: "452 Insufficient storage\r\n", log: "SMTP mailbox quota")
             }
@@ -962,8 +1294,14 @@ private func handleSMTP(_ data: Data, _ session: inout EmailSMTPSession, _ confi
                 candidate.accounts[index].mailbox.append(delivered)
             }
             do {
+                if let deliveryReceipt { try candidate.appendDeliveryReceipt(deliveryReceipt) }
                 try candidate.validate()
                 try TopologyRuntimeEmailStorage.validatePersistedSize(server: candidate)
+            } catch let error as TopologyRuntimeEmailValidationError where error == .deliveryIdentityConflict {
+                return .init(
+                    response: "554 Delivery identity conflicts with previously accepted content\r\n",
+                    log: "SMTP delivery identity conflict"
+                )
             } catch {
                 return .init(response: "452 Insufficient storage\r\n", log: "SMTP persistence quota")
             }

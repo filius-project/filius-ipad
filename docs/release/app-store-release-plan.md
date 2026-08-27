@@ -1,6 +1,6 @@
 # App Store Release Preparation Plan
 
-- **Status:** Preparation required
+- **Status:** Legal permission executed; App Store preparation required
 - **Target platform:** iPadOS 17.0 and later
 - **Document date:** July 18, 2026
 **Audience:** FiliusPad maintainers, release owners, Apple Developer account owners, and CI maintainers
@@ -13,10 +13,10 @@ This is a release runbook, not a claim that the app is ready for submission. The
 
 ## Executive summary
 
-The highest-priority work is:
+The Apple-platform permission gate is now resolved. The remaining highest-priority work is:
 
 1. Create and approve the Apple Developer and App Store Connect records.
-2. Add the production iPad app icon and store assets.
+2. Add and approve the production iPad store assets.
 3. Configure a protected signed Release archive path without weakening the existing unsigned CI evidence workflow.
 4. Complete privacy and export-compliance decisions against the actual shipped binary.
 5. Validate one signed build on physical iPads through TestFlight.
@@ -42,6 +42,12 @@ The current iPad application is configured with these values:
 
 The current project has code signing disabled and has no configured development team. The existing release-readiness workflow intentionally builds an unsigned app for a generic iOS device. That workflow should remain as a credential-free verification job; it is not a distribution workflow.
 
+### Resolved legal input
+
+The returned scan of the executed agreement shows both parties’ handwritten signatures. Sören Schröder signed in Hamburg on August 19, 2026; Dr. Stefan Freischlad signed in Haiger on August 23, 2026. Under the agreement, the latest signing date controls, so the additional permission is effective **August 23, 2026**. The scan is retained in the private production tree only; its SHA-256 is `9827ca00c24c861644e10f0b6c39aa5deeb7cf8966f79f69070fcb7868ad9d75`. The public repository must contain only the clean permission copy and the app must expose that copy with the GPL texts.
+
+This resolves the previously missing effective Apple-distribution permission. It does not replace the separate source-material inventory, third-party license review, Apple account setup, privacy/export decisions, signing, device, or App Review gates.
+
 ### Missing or unresolved release inputs
 
 The following items were not present or were not proven during the repository audit:
@@ -57,7 +63,7 @@ The following items were not present or were not proven during the repository au
 - Export-compliance determination
 - Final support URL and privacy-policy URL
 - Final app name, subtitle, description, keywords, category, age rating, screenshots, and review notes
-- Approved release owner for legal, privacy, export, and App Review attestations
+- Approved release owner for privacy, export, and App Review attestations
 
 The project-readiness validator currently passes in repository mode while reporting unresolved release placeholders. That is expected before Apple credentials and owner decisions are supplied. Release mode must remain a final gate and should not be changed merely to make placeholders disappear.
 
@@ -162,7 +168,7 @@ Audit the application source, build settings, and all dependencies for:
 
 Then:
 
-- [ ] Add `PrivacyInfo.xcprivacy` if required.
+- [x] Add `PrivacyInfo.xcprivacy` for the reviewed `UserDefaults` required-reason API; revalidate it in the final archive.
 - [ ] Declare only API reasons that are actually applicable.
 - [ ] Complete App Store Connect App Privacy details.
 - [ ] Publish a stable HTTPS privacy-policy URL.
@@ -187,7 +193,9 @@ The app appears to be an educational network simulator and no custom cryptograph
 - [ ] Confirm release logs do not expose project contents or personal data.
 - [ ] Confirm imported projects are handled safely and malformed XML/archive content cannot crash the app.
 - [ ] Confirm external document names and content are not inserted into unsafe UI or diagnostic output.
-- [ ] Review third-party notices, licenses, and attribution.
+- [ ] Review third-party notices, licenses, and attribution, including the Java runtime components, using the [upstream material inventory](upstream-material-inventory.md).
+- [x] Archive the Apple-platform additional permission executed in two identical paper originals hand-signed by both parties; retain Sören’s original and a private archival scan. Evidence: `LICENSE-STATUS.md` and the private scan archive.
+- [ ] Confirm the release tree against the [upstream material inventory](upstream-material-inventory.md), including the listed stable-version provenance and third-party notices.
 
 ## Phase 4 — Store metadata and review materials
 

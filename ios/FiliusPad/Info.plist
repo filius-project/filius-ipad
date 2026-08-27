@@ -46,6 +46,12 @@
     </dict>
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_filiuslink._tcp</string>
+    </array>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Filius uses your local network to connect Remote Link devices between iPads.</string>
     <key>UILaunchScreen</key>
     <dict/>
     <key>UISupportedInterfaceOrientations~ipad</key>

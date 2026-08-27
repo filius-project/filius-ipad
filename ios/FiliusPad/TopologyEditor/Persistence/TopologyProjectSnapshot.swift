@@ -33,6 +33,8 @@ enum TopologyProjectSnapshotValidationError: Error, Equatable {
     case remoteLinkConfigurationsFieldMissing
     case missingRemoteLinkConfiguration(nodeID: UUID)
     case remoteLinkConfigurationHasBlankPairIdentifier(nodeID: UUID)
+    case remoteLinkConfigurationHasInvalidLANPort(nodeID: UUID)
+    case remoteLinkConfigurationHasBlankLANRemoteHost(nodeID: UUID)
     case remoteLinkConfigurationReferencesUnknownNode(nodeID: UUID)
     case remoteLinkConfigurationReferencesUnsupportedNodeKind(nodeID: UUID, kind: TopologyNodeKind)
     case duplicateHostWirelessConfiguration(nodeID: UUID)
@@ -51,6 +53,12 @@ enum TopologyProjectSnapshotValidationError: Error, Equatable {
     case runtimeWebServerConfigurationReferencesUnknownNode(nodeID: UUID)
     case runtimeWebServerConfigurationReferencesUnsupportedNodeKind(nodeID: UUID, kind: TopologyNodeKind)
     case invalidRuntimeWebServerConfiguration(nodeID: UUID)
+    case runtimeWebAdministrationConfigurationsFieldMissing
+    case runtimeWebAdministrationPoliciesFieldMissing
+    case duplicateRuntimeWebAdministrationConfiguration(nodeID: UUID)
+    case runtimeWebAdministrationConfigurationReferencesUnknownNode(nodeID: UUID)
+    case runtimeWebAdministrationConfigurationReferencesUnsupportedNodeKind(nodeID: UUID, kind: TopologyNodeKind)
+    case invalidRuntimeWebAdministrationConfiguration(nodeID: UUID)
     case duplicateRuntimeWebBrowserConfiguration(nodeID: UUID)
     case runtimeWebBrowserConfigurationReferencesUnknownNode(nodeID: UUID)
     case runtimeWebBrowserConfigurationReferencesUnsupportedNodeKind(nodeID: UUID, kind: TopologyNodeKind)
@@ -89,6 +97,8 @@ struct TopologyProjectSnapshot: Codable, Equatable {
     let runtimeDNSServerConfigurations: [TopologyRuntimeDNSServerConfigurationSnapshot]
     let runtimeInstalledPrograms: [TopologyRuntimeInstalledProgramSnapshot]
     let runtimeWebServerConfigurations: [TopologyRuntimeWebServerConfigurationSnapshot]
+    let runtimeWebAdministrationConfigurations: [TopologyRuntimeWebAdministrationConfigurationSnapshot]
+    private let legacyRuntimeWebAdministrationPolicies: [TopologyRuntimeWebAdministrationPolicySnapshot]
     let runtimeWebBrowserConfigurations: [TopologyRuntimeWebBrowserConfigurationSnapshot]
     let virtualFileSystems: [TopologyVirtualFileSystemSnapshot]
     let documentationItems: [TopologyDocumentationItemSnapshot]
@@ -100,6 +110,8 @@ struct TopologyProjectSnapshot: Codable, Equatable {
     private let virtualFileSystemsWerePresent: Bool
     private let documentationItemsWerePresent: Bool
     private let runtimeDNSConfigurationsWerePresent: Bool
+    private let runtimeWebAdministrationConfigurationsWerePresent: Bool
+    private let runtimeWebAdministrationPoliciesWerePresent: Bool
     private let protocolApplicationDefinitionsWerePresent: Bool
     private let protocolApplicationInstallationsWerePresent: Bool
 
@@ -121,6 +133,7 @@ struct TopologyProjectSnapshot: Codable, Equatable {
         runtimeDNSServerConfigurations: [TopologyRuntimeDNSServerConfigurationSnapshot] = [],
         runtimeInstalledPrograms: [TopologyRuntimeInstalledProgramSnapshot],
         runtimeWebServerConfigurations: [TopologyRuntimeWebServerConfigurationSnapshot] = [],
+        runtimeWebAdministrationConfigurations: [TopologyRuntimeWebAdministrationConfigurationSnapshot] = [],
         runtimeWebBrowserConfigurations: [TopologyRuntimeWebBrowserConfigurationSnapshot] = [],
         virtualFileSystems: [TopologyVirtualFileSystemSnapshot] = [],
         documentationItems: [TopologyDocumentationItemSnapshot] = [],
@@ -145,6 +158,8 @@ struct TopologyProjectSnapshot: Codable, Equatable {
         self.runtimeDNSServerConfigurations = runtimeDNSServerConfigurations
         self.runtimeInstalledPrograms = runtimeInstalledPrograms
         self.runtimeWebServerConfigurations = runtimeWebServerConfigurations
+        self.runtimeWebAdministrationConfigurations = runtimeWebAdministrationConfigurations
+        legacyRuntimeWebAdministrationPolicies = []
         self.runtimeWebBrowserConfigurations = runtimeWebBrowserConfigurations
         if virtualFileSystems.isEmpty {
             self.virtualFileSystems = graph.toTopologyGraph().nodes
@@ -163,6 +178,8 @@ struct TopologyProjectSnapshot: Codable, Equatable {
         virtualFileSystemsWerePresent = true
         documentationItemsWerePresent = true
         runtimeDNSConfigurationsWerePresent = true
+        runtimeWebAdministrationConfigurationsWerePresent = true
+        runtimeWebAdministrationPoliciesWerePresent = false
         protocolApplicationDefinitionsWerePresent = true
         protocolApplicationInstallationsWerePresent = true
     }
@@ -264,15 +281,19 @@ struct TopologyProjectSnapshot: Codable, Equatable {
             .map { nodeID, configuration in
                 TopologyRuntimeDNSServerConfigurationSnapshot(
                     nodeID: nodeID,
-                    records: configuration.recordsByHostname.values.map { record in
-                        TopologyRuntimeDNSRecordSnapshot(hostname: record.hostname, targetIPAddress: record.targetIPAddress)
-                    }.sorted { $0.hostname < $1.hostname }
+                    records: configuration.typedRecords.map(TopologyRuntimeDNSRecordSnapshot.init),
+                    recursiveResolutionEnabled: configuration.recursiveResolutionEnabled,
+                    forwardingServerIPAddress: configuration.forwardingServerIPAddress
                 )
             }
             .sorted { $0.nodeID.uuidString < $1.nodeID.uuidString }
         runtimeWebServerConfigurations = state.runtimeWebServerConfigurationsByNodeID.map { nodeID, configuration in
             TopologyRuntimeWebServerConfigurationSnapshot(nodeID: nodeID, configuration: configuration)
         }.sorted { $0.nodeID.uuidString < $1.nodeID.uuidString }
+        runtimeWebAdministrationConfigurations = state.runtimeWebAdministrationConfigurationsByNodeID.map { nodeID, configuration in
+            TopologyRuntimeWebAdministrationConfigurationSnapshot(nodeID: nodeID, configuration: configuration)
+        }.sorted { $0.nodeID.uuidString < $1.nodeID.uuidString }
+        legacyRuntimeWebAdministrationPolicies = []
         runtimeWebBrowserConfigurations = state.runtimeWebBrowserConfigurationsByNodeID.map { nodeID, configuration in
             TopologyRuntimeWebBrowserConfigurationSnapshot(nodeID: nodeID, configuration: configuration)
         }.sorted { $0.nodeID.uuidString < $1.nodeID.uuidString }
@@ -317,6 +338,8 @@ struct TopologyProjectSnapshot: Codable, Equatable {
         virtualFileSystemsWerePresent = true
         documentationItemsWerePresent = true
         runtimeDNSConfigurationsWerePresent = true
+        runtimeWebAdministrationConfigurationsWerePresent = true
+        runtimeWebAdministrationPoliciesWerePresent = false
         protocolApplicationDefinitionsWerePresent = true
         protocolApplicationInstallationsWerePresent = true
     }
@@ -339,6 +362,8 @@ struct TopologyProjectSnapshot: Codable, Equatable {
         case runtimeDNSServerConfigurations
         case runtimeInstalledPrograms
         case runtimeWebServerConfigurations
+        case runtimeWebAdministrationConfigurations
+        case runtimeWebAdministrationPolicies
         case runtimeWebBrowserConfigurations
         case virtualFileSystems
         case documentationItems
@@ -365,6 +390,7 @@ struct TopologyProjectSnapshot: Codable, Equatable {
         try container.encode(runtimeDNSServerConfigurations, forKey: .runtimeDNSServerConfigurations)
         try container.encode(runtimeInstalledPrograms, forKey: .runtimeInstalledPrograms)
         try container.encode(runtimeWebServerConfigurations, forKey: .runtimeWebServerConfigurations)
+        try container.encode(runtimeWebAdministrationConfigurations, forKey: .runtimeWebAdministrationConfigurations)
         try container.encode(runtimeWebBrowserConfigurations, forKey: .runtimeWebBrowserConfigurations)
         try container.encode(virtualFileSystems, forKey: .virtualFileSystems)
         try container.encode(documentationItems, forKey: .documentationItems)
@@ -446,6 +472,16 @@ struct TopologyProjectSnapshot: Codable, Equatable {
         runtimeWebServerConfigurations = try container.decodeIfPresent(
             [TopologyRuntimeWebServerConfigurationSnapshot].self,
             forKey: .runtimeWebServerConfigurations
+        ) ?? []
+        runtimeWebAdministrationConfigurationsWerePresent = container.contains(.runtimeWebAdministrationConfigurations)
+        runtimeWebAdministrationConfigurations = try container.decodeIfPresent(
+            [TopologyRuntimeWebAdministrationConfigurationSnapshot].self,
+            forKey: .runtimeWebAdministrationConfigurations
+        ) ?? []
+        runtimeWebAdministrationPoliciesWerePresent = container.contains(.runtimeWebAdministrationPolicies)
+        legacyRuntimeWebAdministrationPolicies = try container.decodeIfPresent(
+            [TopologyRuntimeWebAdministrationPolicySnapshot].self,
+            forKey: .runtimeWebAdministrationPolicies
         ) ?? []
         runtimeWebBrowserConfigurations = try container.decodeIfPresent(
             [TopologyRuntimeWebBrowserConfigurationSnapshot].self,
@@ -549,13 +585,26 @@ struct TopologyProjectSnapshot: Codable, Equatable {
         if let duplicate = duplicateNodeID(in: runtimeWebServerConfigurations.map(\.nodeID)) {
             throw TopologyProjectSnapshotValidationError.duplicateRuntimeWebServerConfiguration(nodeID: duplicate)
         }
+        let restoredGraph = graph.toTopologyGraph()
+        if schemaVersion == 12, !runtimeWebAdministrationPoliciesWerePresent {
+            throw TopologyProjectSnapshotValidationError.runtimeWebAdministrationPoliciesFieldMissing
+        }
+        if schemaVersion >= 13, !runtimeWebAdministrationConfigurationsWerePresent {
+            throw TopologyProjectSnapshotValidationError.runtimeWebAdministrationConfigurationsFieldMissing
+        }
+        let resolvedWebAdministrationConfigurations = try migratedRuntimeWebAdministrationConfigurations(
+            schemaVersion: schemaVersion,
+            graph: restoredGraph
+        )
+        if let duplicate = duplicateNodeID(in: resolvedWebAdministrationConfigurations.map(\.nodeID)) {
+            throw TopologyProjectSnapshotValidationError.duplicateRuntimeWebAdministrationConfiguration(nodeID: duplicate)
+        }
         if let duplicate = duplicateNodeID(in: runtimeWebBrowserConfigurations.map(\.nodeID)) {
             throw TopologyProjectSnapshotValidationError.duplicateRuntimeWebBrowserConfiguration(nodeID: duplicate)
         }
         if let duplicate = duplicateNodeID(in: virtualFileSystems.map(\.nodeID)) {
             throw TopologyProjectSnapshotValidationError.duplicateVirtualFileSystem(nodeID: duplicate)
         }
-        let restoredGraph = graph.toTopologyGraph()
         if schemaVersion >= 9, !protocolApplicationDefinitionsWerePresent {
             throw TopologyProjectSnapshotValidationError.protocolApplicationDefinitionsFieldMissing
         }
@@ -592,7 +641,10 @@ struct TopologyProjectSnapshot: Codable, Equatable {
         }
         try validateRuntimeInterfaceConfigurations(in: restoredGraph)
         try validateRuntimeManualRouteTables(in: restoredGraph)
-        try validateRuntimeWebConfigurations(in: restoredGraph)
+        try validateRuntimeWebConfigurations(
+            in: restoredGraph,
+            administrationConfigurations: resolvedWebAdministrationConfigurations
+        )
 
         for nodeID in runtimeRIPEnabledNodeIDs {
             guard let node = restoredGraph.node(withID: nodeID) else {
@@ -680,6 +732,28 @@ struct TopologyProjectSnapshot: Codable, Equatable {
                 throw TopologyProjectSnapshotValidationError.remoteLinkConfigurationHasBlankPairIdentifier(
                     nodeID: configuration.nodeID
                 )
+            }
+            if configuration.transportMode == .localNetwork {
+                switch configuration.lanRole {
+                case .host:
+                    guard configuration.lanPort > 0 else {
+                        throw TopologyProjectSnapshotValidationError.remoteLinkConfigurationHasInvalidLANPort(
+                            nodeID: configuration.nodeID
+                        )
+                    }
+                case .join:
+                    guard configuration.lanRemotePort > 0 else {
+                        throw TopologyProjectSnapshotValidationError.remoteLinkConfigurationHasInvalidLANPort(
+                            nodeID: configuration.nodeID
+                        )
+                    }
+                    if configuration.lanJoinMethod == .manual,
+                       configuration.lanRemoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        throw TopologyProjectSnapshotValidationError.remoteLinkConfigurationHasBlankLANRemoteHost(
+                            nodeID: configuration.nodeID
+                        )
+                    }
+                }
             }
             guard let node = restoredGraph.node(withID: configuration.nodeID) else {
                 throw TopologyProjectSnapshotValidationError.remoteLinkConfigurationReferencesUnknownNode(
@@ -828,17 +902,26 @@ struct TopologyProjectSnapshot: Codable, Equatable {
             }
         )
         state.runtimeDNSServerConfigurationsByNodeID = resolvedDNSConfigurations.reduce(into: [:]) { partialResult, snapshot in
-            var records: [String: TopologyRuntimeDNSRecord] = [:]
-            for record in snapshot.records {
-                records[record.hostname.lowercased()] = TopologyRuntimeDNSRecord(
-                    hostname: record.hostname.lowercased(),
-                    targetIPAddress: record.targetIPAddress
-                )
-            }
-            partialResult[snapshot.nodeID] = TopologyRuntimeDNSServerConfiguration(recordsByHostname: records)
+            let typedRecords = snapshot.records.compactMap(\.typedRecord)
+            partialResult[snapshot.nodeID] = TopologyRuntimeDNSServerConfiguration(
+                typedRecords: typedRecords,
+                recursiveResolutionEnabled: snapshot.recursiveResolutionEnabled ?? false,
+                forwardingServerIPAddress: snapshot.forwardingServerIPAddress
+            )
         }
         state.runtimeWebServerConfigurationsByNodeID = Dictionary(
-            uniqueKeysWithValues: runtimeWebServerConfigurations.map { ($0.nodeID, $0.configuration) }
+            uniqueKeysWithValues: runtimeWebServerConfigurations.compactMap { snapshot in
+                if schemaVersion <= 12,
+                   runtimeWebAdministrationPoliciesWerePresent,
+                   let node = restoredGraph.node(withID: snapshot.nodeID),
+                   node.kind == .router || node.kind == .gateway {
+                    return nil
+                }
+                return (snapshot.nodeID, snapshot.configuration)
+            }
+        )
+        state.runtimeWebAdministrationConfigurationsByNodeID = Dictionary(
+            uniqueKeysWithValues: resolvedWebAdministrationConfigurations.map { ($0.nodeID, $0.configuration) }
         )
         state.runtimeWebBrowserConfigurationsByNodeID = Dictionary(
             uniqueKeysWithValues: runtimeWebBrowserConfigurations.map { ($0.nodeID, $0.configuration) }
@@ -1005,12 +1088,64 @@ struct TopologyProjectSnapshot: Codable, Equatable {
         }
     }
 
-    private func validateRuntimeWebConfigurations(in graph: TopologyGraph) throws {
+    private func migratedRuntimeWebAdministrationConfigurations(
+        schemaVersion: Int,
+        graph: TopologyGraph
+    ) throws -> [TopologyRuntimeWebAdministrationConfigurationSnapshot] {
+        if runtimeWebAdministrationConfigurationsWerePresent {
+            return runtimeWebAdministrationConfigurations
+        }
+        guard schemaVersion <= 12, runtimeWebAdministrationPoliciesWerePresent else { return [] }
+
+        var legacyWebServerConfigurationsByNodeID: [UUID: TopologyRuntimeWebServerConfigurationSnapshot] = [:]
+        for snapshot in runtimeWebServerConfigurations {
+            guard legacyWebServerConfigurationsByNodeID[snapshot.nodeID] == nil else {
+                throw TopologyProjectSnapshotValidationError.duplicateRuntimeWebServerConfiguration(
+                    nodeID: snapshot.nodeID
+                )
+            }
+            legacyWebServerConfigurationsByNodeID[snapshot.nodeID] = snapshot
+        }
+        let policyNodeIDs = Set(legacyRuntimeWebAdministrationPolicies.map(\.nodeID))
+        var migrated = legacyRuntimeWebAdministrationPolicies.map { snapshot in
+            let node = graph.node(withID: snapshot.nodeID)
+            let migratedPort: Int
+            if node?.kind == .router || node?.kind == .gateway {
+                migratedPort = legacyWebServerConfigurationsByNodeID[snapshot.nodeID]?.port
+                    ?? TopologyRuntimeWebAdministrationConfiguration.defaultPort
+            } else {
+                migratedPort = TopologyRuntimeWebAdministrationConfiguration.defaultPort
+            }
+            return TopologyRuntimeWebAdministrationConfigurationSnapshot(
+                nodeID: snapshot.nodeID,
+                configuration: TopologyRuntimeWebAdministrationConfiguration(
+                    port: migratedPort,
+                    accessPolicy: snapshot.policy
+                )
+            )
+        }
+        migrated.append(contentsOf: runtimeWebServerConfigurations.compactMap { snapshot in
+            guard !policyNodeIDs.contains(snapshot.nodeID),
+                  let node = graph.node(withID: snapshot.nodeID),
+                  node.kind == .router || node.kind == .gateway
+            else { return nil }
+            return TopologyRuntimeWebAdministrationConfigurationSnapshot(
+                nodeID: snapshot.nodeID,
+                configuration: TopologyRuntimeWebAdministrationConfiguration(port: snapshot.port)
+            )
+        })
+        return migrated.sorted { $0.nodeID.uuidString < $1.nodeID.uuidString }
+    }
+
+    private func validateRuntimeWebConfigurations(
+        in graph: TopologyGraph,
+        administrationConfigurations: [TopologyRuntimeWebAdministrationConfigurationSnapshot]
+    ) throws {
         for snapshot in runtimeWebServerConfigurations {
             guard let node = graph.node(withID: snapshot.nodeID) else {
                 throw TopologyProjectSnapshotValidationError.runtimeWebServerConfigurationReferencesUnknownNode(nodeID: snapshot.nodeID)
             }
-            guard node.kind.isPCClassEndpoint else {
+            guard node.kind.isPCClassEndpoint || node.kind == .router || node.kind == .gateway else {
                 throw TopologyProjectSnapshotValidationError.runtimeWebServerConfigurationReferencesUnsupportedNodeKind(
                     nodeID: snapshot.nodeID,
                     kind: node.kind
@@ -1023,6 +1158,25 @@ struct TopologyProjectSnapshot: Codable, Equatable {
                   (try? TopologyVirtualFileSystem.normalizedAbsolutePath(documentRoot)) == documentRoot
             else {
                 throw TopologyProjectSnapshotValidationError.invalidRuntimeWebServerConfiguration(nodeID: snapshot.nodeID)
+            }
+        }
+
+        for snapshot in administrationConfigurations {
+            guard let node = graph.node(withID: snapshot.nodeID) else {
+                throw TopologyProjectSnapshotValidationError.runtimeWebAdministrationConfigurationReferencesUnknownNode(
+                    nodeID: snapshot.nodeID
+                )
+            }
+            guard node.kind == .router || node.kind == .gateway else {
+                throw TopologyProjectSnapshotValidationError.runtimeWebAdministrationConfigurationReferencesUnsupportedNodeKind(
+                    nodeID: snapshot.nodeID,
+                    kind: node.kind
+                )
+            }
+            guard (1...65_535).contains(snapshot.configuration.port) else {
+                throw TopologyProjectSnapshotValidationError.invalidRuntimeWebAdministrationConfiguration(
+                    nodeID: snapshot.nodeID
+                )
             }
         }
 
@@ -1065,15 +1219,19 @@ struct TopologyProjectSnapshot: Codable, Equatable {
             if schemaVersion >= 8, !runtimeInstalledPrograms.contains(where: { $0.nodeID == configuration.nodeID && $0.program == .dnsServer }) {
                 throw TopologyProjectSnapshotValidationError.runtimeDNSServerConfigurationMissingInstalledProgram(nodeID: configuration.nodeID)
             }
-            var hostnames: Set<String> = []
+            var semanticRecords: Set<TopologyDNSResourceRecord> = []
             for record in configuration.records {
-                let hostname = record.hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                guard !hostname.isEmpty else {
+                guard let typedRecord = record.typedRecord else {
                     throw TopologyProjectSnapshotValidationError.invalidRuntimeDNSRecord(hostname: record.hostname)
                 }
-                guard hostnames.insert(hostname).inserted else {
-                    throw TopologyProjectSnapshotValidationError.duplicateRuntimeDNSRecord(hostname: hostname)
+                guard semanticRecords.insert(typedRecord).inserted else {
+                    throw TopologyProjectSnapshotValidationError.duplicateRuntimeDNSRecord(hostname: typedRecord.name.rawValue)
                 }
+            }
+            if let forwarder = configuration.forwardingServerIPAddress,
+               !forwarder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               TopologyDNSIPv4Address(rawValue: forwarder) == nil {
+                throw TopologyProjectSnapshotValidationError.invalidRuntimeDNSRecord(hostname: forwarder)
             }
         }
     }
@@ -1102,13 +1260,19 @@ struct TopologyProjectSnapshot: Codable, Equatable {
                 throw TopologyProjectSnapshotValidationError.runtimeDNSMigrationMissingOwner
             }
 
-            guard let index = resolved.firstIndex(where: { $0.nodeID == owner }) else {
-                resolved.append(TopologyRuntimeDNSServerConfigurationSnapshot(nodeID: owner, records: runtimeDNSRecords))
-                return resolved.sorted { $0.nodeID.uuidString < $1.nodeID.uuidString }
+            let existingRecords: [TopologyRuntimeDNSRecordSnapshot]
+            let existingIndex = resolved.firstIndex(where: { $0.nodeID == owner })
+            if let existingIndex {
+                existingRecords = resolved[existingIndex].records
+            } else {
+                existingRecords = []
             }
-            let existingHostnames = Set(resolved[index].records.map { $0.hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+
+            let existingHostnames = Set(
+                existingRecords.map { $0.hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            )
             var mergedHostnames = existingHostnames
-            var mergedRecords = resolved[index].records
+            var mergedRecords = existingRecords
             for record in runtimeDNSRecords {
                 let hostname = record.hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 guard !hostname.isEmpty else {
@@ -1119,7 +1283,13 @@ struct TopologyProjectSnapshot: Codable, Equatable {
                 }
                 mergedRecords.append(TopologyRuntimeDNSRecordSnapshot(hostname: hostname, targetIPAddress: record.targetIPAddress))
             }
-            resolved[index] = TopologyRuntimeDNSServerConfigurationSnapshot(nodeID: owner, records: mergedRecords)
+
+            let migrated = TopologyRuntimeDNSServerConfigurationSnapshot(nodeID: owner, records: mergedRecords)
+            if let existingIndex {
+                resolved[existingIndex] = migrated
+            } else {
+                resolved.append(migrated)
+            }
         }
         return resolved.sorted { $0.nodeID.uuidString < $1.nodeID.uuidString }
     }
@@ -1168,6 +1338,7 @@ struct TopologyNodeSnapshot: Codable, Equatable {
     let id: UUID
     let kind: TopologyNodeKind
     let displayName: String?
+    let hostLabelPolicy: TopologyHostLabelPolicy
     let position: TopologyPointSnapshot
     let ports: [TopologyPortSnapshot]
 
@@ -1175,12 +1346,14 @@ struct TopologyNodeSnapshot: Codable, Equatable {
         id: UUID,
         kind: TopologyNodeKind,
         displayName: String? = nil,
+        hostLabelPolicy: TopologyHostLabelPolicy = .manual,
         position: TopologyPointSnapshot,
         ports: [TopologyPortSnapshot]
     ) {
         self.id = id
         self.kind = kind
         self.displayName = displayName
+        self.hostLabelPolicy = hostLabelPolicy
         self.position = position
         self.ports = ports
     }
@@ -1189,6 +1362,7 @@ struct TopologyNodeSnapshot: Codable, Equatable {
         id = node.id
         kind = node.kind
         displayName = node.displayName
+        hostLabelPolicy = node.hostLabelPolicy
         position = TopologyPointSnapshot(node.position)
         ports = node.ports.map(TopologyPortSnapshot.init)
     }
@@ -1197,6 +1371,7 @@ struct TopologyNodeSnapshot: Codable, Equatable {
         case id
         case kind
         case displayName
+        case hostLabelPolicy
         case position
         case ports
     }
@@ -1212,6 +1387,7 @@ struct TopologyNodeSnapshot: Codable, Equatable {
         id = try container.decode(UUID.self, forKey: .id)
         kind = try container.decode(TopologyNodeKind.self, forKey: .kind)
         displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
+        hostLabelPolicy = try container.decodeIfPresent(TopologyHostLabelPolicy.self, forKey: .hostLabelPolicy) ?? .manual
         position = try container.decode(TopologyPointSnapshot.self, forKey: .position)
         ports = try container.decode([TopologyPortSnapshot].self, forKey: .ports)
     }
@@ -1221,6 +1397,7 @@ struct TopologyNodeSnapshot: Codable, Equatable {
             id: id,
             kind: kind,
             displayName: displayName,
+            hostLabelPolicy: hostLabelPolicy,
             position: position.toCGPoint,
             ports: ports.map(\.toPortMetadata)
         )
@@ -1231,23 +1408,27 @@ struct TopologyPortSnapshot: Codable, Equatable {
     let id: UUID
     let label: String
     let isOccupied: Bool
+    let importedMACAddress: String?
 
-    init(id: UUID, label: String, isOccupied: Bool) {
+    init(id: UUID, label: String, isOccupied: Bool, importedMACAddress: String? = nil) {
         self.id = id
         self.label = label
         self.isOccupied = isOccupied
+        self.importedMACAddress = TopologyPortMetadata.canonicalMACAddress(importedMACAddress)
     }
 
     init(_ port: TopologyPortMetadata) {
         id = port.id
         label = port.label
         isOccupied = port.isOccupied
+        importedMACAddress = port.importedMACAddress
     }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case id
         case label
         case isOccupied
+        case importedMACAddress
     }
 
     init(from decoder: Decoder) throws {
@@ -1261,10 +1442,21 @@ struct TopologyPortSnapshot: Codable, Equatable {
         id = try container.decode(UUID.self, forKey: .id)
         label = try container.decode(String.self, forKey: .label)
         isOccupied = try container.decode(Bool.self, forKey: .isOccupied)
+        // Imported MAC metadata was optional before host-label parity shipped. Keep older native
+        // projects loadable if that optional value is malformed; valid values are canonicalized and
+        // invalid legacy metadata falls back to the deterministic generated MAC.
+        importedMACAddress = TopologyPortMetadata.canonicalMACAddress(
+            try container.decodeIfPresent(String.self, forKey: .importedMACAddress)
+        )
     }
 
     var toPortMetadata: TopologyPortMetadata {
-        TopologyPortMetadata(id: id, label: label, isOccupied: isOccupied)
+        TopologyPortMetadata(
+            id: id,
+            label: label,
+            isOccupied: isOccupied,
+            importedMACAddress: importedMACAddress
+        )
     }
 }
 
@@ -1637,12 +1829,24 @@ struct TopologyRemoteLinkConfigurationSnapshot: Codable, Equatable {
     let pairIdentifier: String
     let latencyMilliseconds: UInt64
     let isEnabled: Bool
+    let transportMode: TopologyRemoteLinkTransportMode
+    let lanRole: TopologyRemoteLinkLANRole
+    let lanPort: UInt16
+    let lanJoinMethod: TopologyRemoteLinkLANJoinMethod
+    let lanRemoteHost: String
+    let lanRemotePort: UInt16
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case nodeID
         case pairIdentifier
         case latencyMilliseconds
         case isEnabled
+        case transportMode
+        case lanRole
+        case lanPort
+        case lanJoinMethod
+        case lanRemoteHost
+        case lanRemotePort
     }
 
     init(nodeID: UUID, configuration: TopologyRemoteLinkConfiguration) {
@@ -1650,13 +1854,25 @@ struct TopologyRemoteLinkConfigurationSnapshot: Codable, Equatable {
         pairIdentifier = configuration.pairIdentifier
         latencyMilliseconds = configuration.latencyMilliseconds
         isEnabled = configuration.isEnabled
+        transportMode = configuration.transportMode
+        lanRole = configuration.lanRole
+        lanPort = configuration.lanPort
+        lanJoinMethod = configuration.lanJoinMethod
+        lanRemoteHost = configuration.lanRemoteHost
+        lanRemotePort = configuration.lanRemotePort
     }
 
     var configuration: TopologyRemoteLinkConfiguration {
         TopologyRemoteLinkConfiguration(
             pairIdentifier: pairIdentifier,
             latencyMilliseconds: latencyMilliseconds,
-            isEnabled: isEnabled
+            isEnabled: isEnabled,
+            transportMode: transportMode,
+            lanRole: lanRole,
+            lanPort: lanPort,
+            lanJoinMethod: lanJoinMethod,
+            lanRemoteHost: lanRemoteHost,
+            lanRemotePort: lanRemotePort
         )
     }
 
@@ -1674,6 +1890,12 @@ struct TopologyRemoteLinkConfigurationSnapshot: Codable, Equatable {
             forKey: .latencyMilliseconds
         ) ?? TopologyRemoteLinkConfiguration.defaultLatencyMilliseconds
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        transportMode = try container.decodeIfPresent(TopologyRemoteLinkTransportMode.self, forKey: .transportMode) ?? .inProject
+        lanRole = try container.decodeIfPresent(TopologyRemoteLinkLANRole.self, forKey: .lanRole) ?? .host
+        lanPort = try container.decodeIfPresent(UInt16.self, forKey: .lanPort) ?? TopologyRemoteLinkConfiguration.defaultLANPort
+        lanJoinMethod = try container.decodeIfPresent(TopologyRemoteLinkLANJoinMethod.self, forKey: .lanJoinMethod) ?? .bonjour
+        lanRemoteHost = try container.decodeIfPresent(String.self, forKey: .lanRemoteHost) ?? ""
+        lanRemotePort = try container.decodeIfPresent(UInt16.self, forKey: .lanRemotePort) ?? TopologyRemoteLinkConfiguration.defaultLANPort
     }
 }
 
@@ -1945,15 +2167,26 @@ struct TopologyGatewayPortForwardingTableSnapshot: Codable, Equatable {
 struct TopologyRuntimeDNSServerConfigurationSnapshot: Codable, Equatable {
     let nodeID: UUID
     let records: [TopologyRuntimeDNSRecordSnapshot]
+    let recursiveResolutionEnabled: Bool?
+    let forwardingServerIPAddress: String?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case nodeID
         case records
+        case recursiveResolutionEnabled
+        case forwardingServerIPAddress
     }
 
-    init(nodeID: UUID, records: [TopologyRuntimeDNSRecordSnapshot]) {
+    init(
+        nodeID: UUID,
+        records: [TopologyRuntimeDNSRecordSnapshot],
+        recursiveResolutionEnabled: Bool = false,
+        forwardingServerIPAddress: String? = nil
+    ) {
         self.nodeID = nodeID
         self.records = records
+        self.recursiveResolutionEnabled = recursiveResolutionEnabled
+        self.forwardingServerIPAddress = forwardingServerIPAddress
     }
 
     init(from decoder: Decoder) throws {
@@ -1961,21 +2194,51 @@ struct TopologyRuntimeDNSServerConfigurationSnapshot: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         nodeID = try container.decode(UUID.self, forKey: .nodeID)
         records = try container.decode([TopologyRuntimeDNSRecordSnapshot].self, forKey: .records)
+        recursiveResolutionEnabled = try container.decodeIfPresent(Bool.self, forKey: .recursiveResolutionEnabled)
+        forwardingServerIPAddress = try container.decodeIfPresent(String.self, forKey: .forwardingServerIPAddress)
     }
 }
 
 struct TopologyRuntimeDNSRecordSnapshot: Codable, Equatable {
     let hostname: String
     let targetIPAddress: String
+    let type: TopologyDNSRecordType?
+    let ttlSeconds: UInt32?
+    let target: String?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case hostname
         case targetIPAddress
+        case type
+        case ttlSeconds
+        case target
     }
 
     init(hostname: String, targetIPAddress: String) {
         self.hostname = hostname
         self.targetIPAddress = targetIPAddress
+        self.type = nil
+        self.ttlSeconds = nil
+        self.target = nil
+    }
+
+    init(_ record: TopologyDNSResourceRecord) {
+        self.hostname = record.name.rawValue
+        self.targetIPAddress = record.type == .address ? record.target : ""
+        self.type = record.type
+        self.ttlSeconds = record.ttlSeconds
+        self.target = record.target
+    }
+
+    var typedRecord: TopologyDNSResourceRecord? {
+        let effectiveType = type ?? .address
+        let effectiveTarget = target ?? targetIPAddress
+        return TopologyDNSResourceRecord(
+            name: hostname,
+            type: effectiveType,
+            ttlSeconds: ttlSeconds ?? TopologyDNSResourceRecord.defaultTTLSeconds,
+            target: effectiveTarget
+        )
     }
 
     init(from decoder: Decoder) throws {
@@ -1987,7 +2250,25 @@ struct TopologyRuntimeDNSRecordSnapshot: Codable, Equatable {
 
         let container = try decoder.container(keyedBy: CodingKeys.self)
         hostname = try container.decode(String.self, forKey: .hostname)
-        targetIPAddress = try container.decode(String.self, forKey: .targetIPAddress)
+        targetIPAddress = try container.decodeIfPresent(String.self, forKey: .targetIPAddress) ?? ""
+        type = try container.decodeIfPresent(TopologyDNSRecordType.self, forKey: .type)
+        ttlSeconds = try container.decodeIfPresent(UInt32.self, forKey: .ttlSeconds)
+        target = try container.decodeIfPresent(String.self, forKey: .target)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(hostname, forKey: .hostname)
+        if let type {
+            try container.encode(type, forKey: .type)
+            try container.encode(ttlSeconds ?? TopologyDNSResourceRecord.defaultTTLSeconds, forKey: .ttlSeconds)
+            try container.encode(target ?? targetIPAddress, forKey: .target)
+            if type == .address {
+                try container.encode(target ?? targetIPAddress, forKey: .targetIPAddress)
+            }
+        } else {
+            try container.encode(targetIPAddress, forKey: .targetIPAddress)
+        }
     }
 }
 
@@ -1995,18 +2276,26 @@ struct TopologyRuntimeWebServerConfigurationSnapshot: Codable, Equatable {
     let nodeID: UUID
     let port: Int
     let documentRoot: String
+    let virtualHostConfiguration: TopologyRuntimeWebVirtualHostConfiguration?
 
     init(nodeID: UUID, configuration: TopologyRuntimeWebServerConfiguration) {
         self.nodeID = nodeID
         port = configuration.port
         documentRoot = configuration.documentRoot
+        virtualHostConfiguration = configuration.virtualHostConfiguration
     }
 
     var configuration: TopologyRuntimeWebServerConfiguration {
-        TopologyRuntimeWebServerConfiguration(port: port, documentRoot: documentRoot)
+        TopologyRuntimeWebServerConfiguration(
+            port: port,
+            documentRoot: documentRoot,
+            virtualHostConfiguration: virtualHostConfiguration
+        )
     }
 
-    enum CodingKeys: String, CodingKey, CaseIterable { case nodeID, port, documentRoot }
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case nodeID, port, documentRoot, virtualHostConfiguration
+    }
 
     init(from decoder: Decoder) throws {
         try assertNoUnknownKeys(decoder: decoder, allowedKeys: CodingKeys.self, context: "TopologyRuntimeWebServerConfigurationSnapshot")
@@ -2014,6 +2303,63 @@ struct TopologyRuntimeWebServerConfigurationSnapshot: Codable, Equatable {
         nodeID = try container.decode(UUID.self, forKey: .nodeID)
         port = try container.decode(Int.self, forKey: .port)
         documentRoot = try container.decode(String.self, forKey: .documentRoot)
+        virtualHostConfiguration = try container.decodeIfPresent(
+            TopologyRuntimeWebVirtualHostConfiguration.self,
+            forKey: .virtualHostConfiguration
+        )
+    }
+}
+
+struct TopologyRuntimeWebAdministrationConfigurationSnapshot: Codable, Equatable {
+    let nodeID: UUID
+    let configuration: TopologyRuntimeWebAdministrationConfiguration
+
+    init(nodeID: UUID, configuration: TopologyRuntimeWebAdministrationConfiguration) {
+        self.nodeID = nodeID
+        self.configuration = configuration
+    }
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case nodeID, configuration
+    }
+
+    init(from decoder: Decoder) throws {
+        try assertNoUnknownKeys(
+            decoder: decoder,
+            allowedKeys: CodingKeys.self,
+            context: "TopologyRuntimeWebAdministrationConfigurationSnapshot"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        nodeID = try container.decode(UUID.self, forKey: .nodeID)
+        configuration = try container.decode(
+            TopologyRuntimeWebAdministrationConfiguration.self,
+            forKey: .configuration
+        )
+    }
+}
+
+struct TopologyRuntimeWebAdministrationPolicySnapshot: Codable, Equatable {
+    let nodeID: UUID
+    let policy: TopologyRuntimeWebAdministrationAccessPolicy
+
+    init(nodeID: UUID, policy: TopologyRuntimeWebAdministrationAccessPolicy) {
+        self.nodeID = nodeID
+        self.policy = policy
+    }
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case nodeID, policy
+    }
+
+    init(from decoder: Decoder) throws {
+        try assertNoUnknownKeys(
+            decoder: decoder,
+            allowedKeys: CodingKeys.self,
+            context: "TopologyRuntimeWebAdministrationPolicySnapshot"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        nodeID = try container.decode(UUID.self, forKey: .nodeID)
+        policy = try container.decode(TopologyRuntimeWebAdministrationAccessPolicy.self, forKey: .policy)
     }
 }
 

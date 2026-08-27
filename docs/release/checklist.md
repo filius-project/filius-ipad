@@ -18,6 +18,8 @@ Every checkbox needs an owner and evidence link. “Not applicable” requires a
 - [ ] Screenshots and preview plan covers required iPad display classes and contains no test/debug/private data.
 - [ ] Real-iPad protocol passes on the release commit with linked evidence.
 - [ ] Third-party notices, licenses, and attribution are reviewed.
+- [x] The Apple-platform additional permission has been executed in two identical paper originals hand-signed by both parties; Sören’s fully signed original and a private archival scan are retained. Evidence: `LICENSE-STATUS.md` and the private scan archive; latest signing date August 23, 2026.
+- [ ] Every upstream source or resource relied on under the additional permission comes from v2.10.1, one of the listed stable releases through v2.13.0, or a later official stable tagged release covered automatically by the agreement. Start with [upstream material inventory](upstream-material-inventory.md); exact asset and third-party review remains required.
 - [ ] Privacy questionnaire, privacy manifest decision, required-reason API review, and data-retention/deletion statements match the shipped source/dependencies.
 - [ ] Export-compliance determination is reviewed and documented.
 - [ ] `python scripts/project/validate_project_readiness.py --release` passes.
@@ -68,4 +70,4 @@ Every checkbox needs an owner and evidence link. “Not applicable” requires a
 
 ## Stop conditions
 
-Stop the release if the commit/build identity is ambiguous, Xcode/iOS SDK is below 26, signing identity differs from the approved contract, metadata/privacy/export answers are unresolved, evidence contains secrets, critical device tests fail, or a workflow requests broader permissions than documented.
+Stop the release if the commit/build identity is ambiguous, Xcode/iOS SDK is below 26, signing identity differs from the approved contract, the required GPL or effective hand-signed Apple-distribution permission is missing, metadata/privacy/export answers are unresolved, evidence contains secrets, critical device tests fail, or a workflow requests broader permissions than documented.

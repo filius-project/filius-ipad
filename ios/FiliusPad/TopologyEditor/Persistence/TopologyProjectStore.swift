@@ -462,6 +462,7 @@ struct TopologyProjectStore {
         state.runtimePortForwardingRowsByNodeID = parseResult.runtimePortForwardingRowsByNodeID
         state.virtualFileSystemsByNodeID = parseResult.virtualFileSystemsByNodeID
         state.runtimeInstalledProgramsByNodeID = parseResult.runtimeInstalledProgramsByNodeID
+        state.runtimeDNSServerConfigurationsByNodeID = parseResult.runtimeDNSServerConfigurationsByNodeID
         state.runtimeWebServerConfigurationsByNodeID = parseResult.runtimeWebServerConfigurationsByNodeID
         state.runtimeEmailClientConfigurationsByNodeID = parseResult.runtimeEmailClientConfigurationsByNodeID
         state.runtimeEmailServerConfigurationsByNodeID = parseResult.runtimeEmailServerConfigurationsByNodeID
@@ -470,7 +471,9 @@ struct TopologyProjectStore {
         }
         for nodeID in state.runtimeInstalledProgramsByNodeID.keys.sorted(by: { $0.uuidString < $1.uuidString })
             where state.runtimeInstalledProgramsByNodeID[nodeID]?.contains(.dnsServer) == true {
-            state.runtimeDNSServerConfigurationsByNodeID[nodeID] = TopologyRuntimeDNSServerConfiguration()
+            if state.runtimeDNSServerConfigurationsByNodeID[nodeID] == nil {
+                state.runtimeDNSServerConfigurationsByNodeID[nodeID] = TopologyRuntimeDNSServerConfiguration()
+            }
             state.synchronizeRuntimeDNSConfigurationFromHostsFile(nodeID: nodeID)
         }
         var importWarnings = parseResult.warnings
@@ -597,6 +600,25 @@ struct TopologyProjectStore {
             .filter { $0.kind != .unsupported }
             .sorted { $0.id.uuidString < $1.id.uuidString }
         let exportedNodeIDs = Set(sortedNodes.map(\.id))
+
+        for node in sortedNodes where state.runtimeInstalledProgramsByNodeID[node.id]?.contains(.dnsServer) == true {
+            guard let dnsConfiguration = state.runtimeDNSServerConfigurationsByNodeID[node.id],
+                  dnsConfiguration.recursiveResolutionEnabled
+            else { continue }
+            let rawNativeForwarder = dnsConfiguration.forwardingServerIPAddress?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let nativeForwarder = rawNativeForwarder.isEmpty ? nil : rawNativeForwarder
+            let deviceConfiguration = state.runtimeDeviceConfigurations[node.id]
+            let hostDNS = deviceConfiguration?.dnsServer
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let primaryIPAddress = deviceConfiguration?.ipAddress
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let javaForwarder = hostDNS.isEmpty || hostDNS == primaryIPAddress ? nil : hostDNS
+            guard nativeForwarder != javaForwarder else { continue }
+            exportWarnings.append(
+                "DNS Server on '\(node.displayName)' cannot preserve recursive forwarding exactly: native forwarder is '\(nativeForwarder ?? "none")', while Java FILIUS derives it from the host interface DNS field as '\(javaForwarder ?? "none")'; exported the host DNS value unchanged."
+            )
+        }
 
         var portReferenceByID: [UUID: String] = [:]
         var portOwnerByID: [UUID: UUID] = [:]
@@ -867,6 +889,11 @@ struct TopologyProjectStore {
                     "Remote Link pair '\(pairIdentifier)' uses native latency; Java Modem export cannot represent latencyMilliseconds."
                 )
             }
+            if configurations.contains(where: { $0.transportMode == .localNetwork }) {
+                exportWarnings.append(
+                    "Remote Link pair '\(pairIdentifier)' uses iPad local-network transport; Java Modem export cannot preserve discovery, role, address, encryption, or live connection state."
+                )
+            }
             if configurations.contains(where: { !$0.isEnabled }) {
                 exportWarnings.append(
                     "Remote Link pair '\(pairIdentifier)' contains a disabled endpoint; Java Modem export cannot preserve link-up state."
@@ -921,6 +948,14 @@ struct TopologyProjectStore {
             lines.append("    <void property=\"knoten\">")
             lines.append("     <object class=\"\(hardwareClass(for: node.kind))\">")
             lines.append("      <void property=\"name\"><string>\(escapedXML(label))</string></void>")
+            if node.kind.isPCClassEndpoint {
+                if node.hostLabelPolicy == .ipAddress || node.hostLabelPolicy == .ipAndMAC {
+                    lines.append("      <void property=\"useIPAsName\"><boolean>true</boolean></void>")
+                }
+                if node.hostLabelPolicy == .macAddress || node.hostLabelPolicy == .ipAndMAC {
+                    lines.append("      <void property=\"useMACAsName\"><boolean>true</boolean></void>")
+                }
+            }
 
             if node.kind == .networkSwitch || node.kind == .remoteLink {
                 lines.append("      <void property=\"anschluesse\">")
@@ -947,6 +982,7 @@ struct TopologyProjectStore {
 
                     let indent = usesExistingInterface ? "        " : "         "
                     lines.append("\(indent)<void property=\"ip\"><string>\(escapedXML(configuration.ipAddress))</string></void>")
+                    lines.append("\(indent)<void property=\"mac\"><string>\(port.effectiveMACAddress)</string></void>")
                     lines.append("\(indent)<void property=\"subnetzMaske\"><string>\(escapedXML(configuration.subnetMask))</string></void>")
                     if !configuration.defaultGateway.isEmpty {
                         lines.append("\(indent)<void property=\"gateway\"><string>\(escapedXML(configuration.defaultGateway))</string></void>")
@@ -1138,11 +1174,16 @@ struct TopologyProjectStore {
                     lines.append("       </void>")
                 }
                 if dnsServerInstalled {
+                    let dnsConfiguration = state.runtimeDNSServerConfigurationsByNodeID[node.id]
+                        ?? TopologyRuntimeDNSServerConfiguration()
                     lines.append("       <void property=\"installierteAnwendungen\">")
                     lines.append("        <void method=\"put\">")
                     lines.append("         <string>filius.software.dns.DNSServer</string>")
                     lines.append("         <object class=\"filius.software.dns.DNSServer\">")
                     lines.append("          <void property=\"aktiv\"><boolean>false</boolean></void>")
+                    if dnsConfiguration.recursiveResolutionEnabled {
+                        lines.append("          <void property=\"recursiveResolutionEnabled\"><boolean>true</boolean></void>")
+                    }
                     lines.append("         </object>")
                     lines.append("        </void>")
                     lines.append("       </void>")
@@ -1537,6 +1578,7 @@ private struct TopologyFLSConfigurationParseResult {
     let hostWirelessConfigurationsByNodeID: [UUID: TopologyHostWirelessConfiguration]
     let virtualFileSystemsByNodeID: [UUID: TopologyVirtualFileSystem]
     let runtimeInstalledProgramsByNodeID: [UUID: Set<TopologyRuntimeInstallableProgram>]
+    let runtimeDNSServerConfigurationsByNodeID: [UUID: TopologyRuntimeDNSServerConfiguration]
     let runtimeWebServerConfigurationsByNodeID: [UUID: TopologyRuntimeWebServerConfiguration]
     let runtimeEmailClientConfigurationsByNodeID: [UUID: TopologyRuntimeEmailClientConfiguration]
     let runtimeEmailServerConfigurationsByNodeID: [UUID: TopologyRuntimeEmailServerConfiguration]
@@ -1566,6 +1608,7 @@ private final class TopologyFLSConfigurationParser: NSObject, XMLParserDelegate 
         var subnetMask: String?
         var defaultGateway: String?
         var dnsServer: String?
+        var macAddress: String?
         var legacyPortReference: String?
     }
 
@@ -1638,6 +1681,8 @@ private final class TopologyFLSConfigurationParser: NSObject, XMLParserDelegate 
         var typeName: String?
         var knotenClassName: String?
         var displayName: String?
+        var useIPAsName = false
+        var useMACAsName = false
         var x: Int?
         var y: Int?
         var interfaces: [InterfaceCandidate] = []
@@ -1658,6 +1703,7 @@ private final class TopologyFLSConfigurationParser: NSObject, XMLParserDelegate 
         var fileSystemRoots: [JavaFileTreeCandidate] = []
         var hasFileSystem = false
         var hasDNSServerApplication = false
+        var dnsRecursiveResolutionEnabled = false
         var hasPersonalFirewallApplication = false
         var hasWebServerApplication = false
         var hasWebBrowserApplication = false
@@ -1739,6 +1785,7 @@ private final class TopologyFLSConfigurationParser: NSObject, XMLParserDelegate 
     private var hostWirelessConfigurationsByNodeID: [UUID: TopologyHostWirelessConfiguration] = [:]
     private var virtualFileSystemsByNodeID: [UUID: TopologyVirtualFileSystem] = [:]
     private var runtimeInstalledProgramsByNodeID: [UUID: Set<TopologyRuntimeInstallableProgram>] = [:]
+    private var runtimeDNSServerConfigurationsByNodeID: [UUID: TopologyRuntimeDNSServerConfiguration] = [:]
     private var runtimeWebServerConfigurationsByNodeID: [UUID: TopologyRuntimeWebServerConfiguration] = [:]
     private var runtimeEmailClientConfigurationsByNodeID: [UUID: TopologyRuntimeEmailClientConfiguration] = [:]
     private var runtimeEmailServerConfigurationsByNodeID: [UUID: TopologyRuntimeEmailServerConfiguration] = [:]
@@ -1841,6 +1888,7 @@ private final class TopologyFLSConfigurationParser: NSObject, XMLParserDelegate 
             hostWirelessConfigurationsByNodeID: hostWirelessConfigurationsByNodeID,
             virtualFileSystemsByNodeID: virtualFileSystemsByNodeID,
             runtimeInstalledProgramsByNodeID: runtimeInstalledProgramsByNodeID,
+            runtimeDNSServerConfigurationsByNodeID: runtimeDNSServerConfigurationsByNodeID,
             runtimeWebServerConfigurationsByNodeID: runtimeWebServerConfigurationsByNodeID,
             runtimeEmailClientConfigurationsByNodeID: runtimeEmailClientConfigurationsByNodeID,
             runtimeEmailServerConfigurationsByNodeID: runtimeEmailServerConfigurationsByNodeID,
@@ -2349,6 +2397,8 @@ private final class TopologyFLSConfigurationParser: NSObject, XMLParserDelegate 
                             interface.defaultGateway = value
                         case "dns" where interface.dnsServer == nil:
                             interface.dnsServer = value
+                        case "mac" where interface.macAddress == nil:
+                            interface.macAddress = TopologyPortMetadata.canonicalMACAddress(value)
                         default:
                             break
                         }
@@ -2399,7 +2449,11 @@ private final class TopologyFLSConfigurationParser: NSObject, XMLParserDelegate 
             if currentNode != nil, let property = propertyStack.last {
                 let enabled = value.lowercased() == "true"
                 switch property {
+                case "useIPAsName": currentNode?.useIPAsName = enabled
+                case "useMACAsName": currentNode?.useMACAsName = enabled
                 case "ripEnabled": currentNode?.ripEnabled = enabled
+                case "recursiveResolutionEnabled" where objectClassStack.last == "filius.software.dns.DNSServer":
+                    currentNode?.dnsRecursiveResolutionEnabled = enabled
                 case "DHCPKonfiguration": currentNode?.dhcpClientEnabled = enabled
                 case "aktiv" where propertyStack.contains("DHCPServer"):
                     currentNode?.dhcpServerConfiguration.isActive = enabled
@@ -3327,10 +3381,21 @@ private final class TopologyFLSConfigurationParser: NSObject, XMLParserDelegate 
         }
 
         let ports = importedPorts(for: nodeKind, candidate: candidate)
+        let hostLabelPolicy: TopologyHostLabelPolicy
+        if candidate.useIPAsName && candidate.useMACAsName {
+            hostLabelPolicy = .ipAndMAC
+        } else if candidate.useIPAsName {
+            hostLabelPolicy = .ipAddress
+        } else if candidate.useMACAsName {
+            hostLabelPolicy = .macAddress
+        } else {
+            hostLabelPolicy = .manual
+        }
         let node = TopologyNode(
             id: UUID(),
             kind: nodeKind,
             displayName: candidate.displayName,
+            hostLabelPolicy: hostLabelPolicy,
             position: CGPoint(x: x, y: y),
             ports: ports
         )
@@ -3385,6 +3450,19 @@ private final class TopologyFLSConfigurationParser: NSObject, XMLParserDelegate 
         }
         if node.kind.isPCClassEndpoint, candidate.hasDNSServerApplication {
             runtimeInstalledProgramsByNodeID[node.id, default: []].insert(.dnsServer)
+            // Java DNSServer persists the recursion flag on the application bean, while
+            // its recursive fallback target is the host's primary interface DNS setting.
+            let forwarder = candidate.interfaces.first?.dnsServer?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let primaryIPAddress = candidate.interfaces.first?.ipAddress?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let hasDistinctForwarder = candidate.dnsRecursiveResolutionEnabled
+                && forwarder?.isEmpty == false
+                && forwarder != primaryIPAddress
+            runtimeDNSServerConfigurationsByNodeID[node.id] = TopologyRuntimeDNSServerConfiguration(
+                recursiveResolutionEnabled: candidate.dnsRecursiveResolutionEnabled,
+                forwardingServerIPAddress: hasDistinctForwarder ? forwarder : nil
+            )
         }
         if node.kind.isPCClassEndpoint, candidate.hasPersonalFirewallApplication {
             runtimeInstalledProgramsByNodeID[node.id, default: []].insert(.firewall)
@@ -3417,29 +3495,36 @@ private final class TopologyFLSConfigurationParser: NSObject, XMLParserDelegate 
     }
 
     private func importedPorts(for nodeKind: TopologyNodeKind, candidate: NodeCandidate) -> [TopologyPortMetadata] {
+        func port(label: String, interfaceIndex: Int? = nil) -> TopologyPortMetadata {
+            let importedMACAddress = interfaceIndex.flatMap { index in
+                candidate.interfaces.indices.contains(index) ? candidate.interfaces[index].macAddress : nil
+            }
+            return TopologyPortMetadata(label: label, importedMACAddress: importedMACAddress)
+        }
+
         switch nodeKind {
         case .pc, .notebook:
-            return [TopologyPortMetadata(label: "eth0")]
+            return [port(label: "eth0", interfaceIndex: 0)]
         case .networkSwitch:
             let highestReferencedIndex = candidate.switchPortReferencesByIndex.keys.max() ?? -1
             let count = max(24, highestReferencedIndex + 1)
-            return (1...count).map { TopologyPortMetadata(label: "sw\($0)") }
+            return (1...count).map { port(label: "sw\($0)") }
         case .router:
             let count = max(1, candidate.interfaces.count)
-            return (1...count).map { TopologyPortMetadata(label: "rt\($0)") }
+            return (0..<count).map { port(label: "rt\($0 + 1)", interfaceIndex: $0) }
         case .gateway:
             let count = max(2, candidate.interfaces.count)
             return (0..<count).map { index in
                 if index == 0 {
-                    return TopologyPortMetadata(label: "wan0")
+                    return port(label: "wan0", interfaceIndex: index)
                 }
                 if index == 1 {
-                    return TopologyPortMetadata(label: "lan0")
+                    return port(label: "lan0", interfaceIndex: index)
                 }
-                return TopologyPortMetadata(label: "gw\(index)")
+                return port(label: "gw\(index)", interfaceIndex: index)
             }
         case .remoteLink:
-            return [TopologyPortMetadata(label: "remote0")]
+            return [port(label: "remote0")]
         case .unsupported:
             return []
         }

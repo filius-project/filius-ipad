@@ -11,6 +11,59 @@ func updatingPersonalFirewallConfiguration(
     return updated
 }
 
+enum TopologyRuntimeVirtualHostEditor {
+    static func saving(
+        _ host: TopologyRuntimeWebVirtualHost,
+        selectedHostID: String?,
+        selectedDefaultHostID: String?,
+        in existing: TopologyRuntimeWebVirtualHostConfiguration?
+    ) throws -> TopologyRuntimeWebVirtualHostConfiguration {
+        var hosts = existing?.hosts ?? []
+        if let selectedHostID {
+            hosts.removeAll { $0.id == selectedHostID }
+        }
+        hosts.removeAll { $0.id == host.id }
+        hosts.append(host)
+
+        let previousDefaultID = selectedDefaultHostID ?? existing?.defaultHostID
+        let preferredDefaultID = previousDefaultID == selectedHostID
+            ? host.id
+            : (previousDefaultID ?? host.id)
+        let defaultHostID: String
+        if hosts.contains(where: { $0.id == preferredDefaultID && $0.isEnabled }) {
+            defaultHostID = preferredDefaultID
+        } else if host.isEnabled {
+            defaultHostID = host.id
+        } else if let firstEnabled = hosts.first(where: \.isEnabled) {
+            defaultHostID = firstEnabled.id
+        } else {
+            throw TopologyRuntimeWebVirtualHostError.defaultHostDisabled(preferredDefaultID)
+        }
+        return try TopologyRuntimeWebVirtualHostConfiguration(
+            hosts: hosts,
+            defaultHostID: defaultHostID
+        )
+    }
+
+    static func removing(
+        hostID: String,
+        from existing: TopologyRuntimeWebVirtualHostConfiguration
+    ) throws -> TopologyRuntimeWebVirtualHostConfiguration? {
+        let remaining = existing.hosts.filter { $0.id != hostID }
+        guard !remaining.isEmpty else { return nil }
+        guard let fallbackDefault = remaining.first(where: \.isEnabled) else {
+            throw TopologyRuntimeWebVirtualHostError.defaultHostDisabled(existing.defaultHostID)
+        }
+        let defaultHostID = remaining.contains {
+            $0.id == existing.defaultHostID && $0.isEnabled
+        } ? existing.defaultHostID : fallbackDefault.id
+        return try TopologyRuntimeWebVirtualHostConfiguration(
+            hosts: remaining,
+            defaultHostID: defaultHostID
+        )
+    }
+}
+
 func topologyRuntimeDeviceTitle(for nodeKind: TopologyNodeKind) -> String {
     switch nodeKind {
     case .pc:
@@ -68,11 +121,15 @@ struct TopologyRuntimeDeviceSheet: View {
     let consoleEntries: [String]
     let terminalWorkingDirectory: String
     let dhcpLease: TopologyRuntimeDeviceConfiguration?
-    let dnsRecords: [TopologyRuntimeDNSRecord]
+    let dnsRecords: [TopologyDNSResourceRecord]
+    let dnsRecursiveResolutionEnabled: Bool
+    let dnsForwardingServerIPAddress: String?
     let dnsServerState: TopologyRuntimeServiceProcessState?
     let webServerState: TopologyRuntimeServiceProcessState?
     let webServerConfiguration: TopologyRuntimeWebServerConfiguration
     let webServerRequestLogs: [TopologyRuntimeWebServerRequestLogEntry]
+    let webAdministrationConfiguration: TopologyRuntimeWebAdministrationConfiguration
+    let webAdministrationRunning: Bool
     let webBrowserConfiguration: TopologyRuntimeWebBrowserConfiguration
     let webBrowserState: TopologyRuntimeWebBrowserState?
     let echoServerState: TopologyRuntimeServiceProcessState?
@@ -98,6 +155,7 @@ struct TopologyRuntimeDeviceSheet: View {
     let onResetNATTable: () -> Void
     let onSavePortForwardingRows: ([TopologyGatewayPortForwardingRow]) -> Void
     let onResetPacketCapture: () -> Void
+    let onExportPacketCapture: (UUID?) -> Void
     let onInstallProgram: (TopologyRuntimeInstallableProgram) -> Void
     let onUninstallProgram: (TopologyRuntimeInstallableProgram) -> Void
     let onLaunchProgram: (TopologyRuntimeInstallableProgram) -> Void
@@ -111,11 +169,16 @@ struct TopologyRuntimeDeviceSheet: View {
     let onExecuteCommand: (String) -> Void
     let onDHCPLease: (String, String) -> Void
     let onDHCPRelease: () -> Void
-    let onDNSAddRecord: (String, String) -> Void
-    let onDNSRemoveRecord: (String) -> Void
-    let onDNSResolveRecord: (String) -> Void
+    let onDNSAddTypedRecord: (String, TopologyDNSRecordType, String, UInt32) -> Void
+    let onDNSRemoveTypedRecord: (TopologyDNSResourceRecord) -> Void
+    let onDNSResolveTypedRecord: (String, TopologyDNSRecordType) -> Void
+    let onDNSSetRecursion: (Bool, String) -> Void
     let onDNSStart: () -> Void
     let onDNSStop: () -> Void
+    let onSaveWebServerConfiguration: (TopologyRuntimeWebServerConfiguration) -> Void
+    let onSaveWebAdministrationConfiguration: (TopologyRuntimeWebAdministrationConfiguration) -> Void
+    let onWebAdministrationStart: (String) -> Void
+    let onWebAdministrationStop: () -> Void
     let onWebStart: (String) -> Void
     let onWebStop: () -> Void
     let onWebRestart: (String) -> Void
@@ -131,6 +194,7 @@ struct TopologyRuntimeDeviceSheet: View {
     let onSaveEmailClientConfiguration: (TopologyRuntimeEmailClientConfiguration) -> Void
     let onSendEmail: (TopologyRuntimeEmailMessage) -> Void
     let onRetrieveEmail: () -> Void
+    let onDeleteEmailMessages: (TopologyRuntimeEmailClientFolder, [UInt64]) -> Void
     let onSaveEmailServerConfiguration: (TopologyRuntimeEmailServerConfiguration) -> Void
     let onStartEmailServer: (TopologyRuntimeEmailServerConfiguration) -> Void
     let onStopEmailServer: () -> Void
@@ -158,9 +222,29 @@ struct TopologyRuntimeDeviceSheet: View {
     @State private var dhcpLeaseIPAddress: String
     @State private var dhcpLeaseSubnetMask: String
     @State private var dnsHostname: String
-    @State private var dnsTargetIPAddress: String
+    @State private var dnsTarget: String
+    @State private var dnsRecordType: TopologyDNSRecordType
+    @State private var dnsTTL: String
     @State private var dnsLookupHostname: String
+    @State private var dnsLookupRecordType: TopologyDNSRecordType
+    @State private var dnsForwarder: String
+    @State private var dnsRecursionEnabled: Bool
     @State private var webPort: String
+    @State private var webDocumentRoot: String
+    @State private var virtualHostID: String
+    @State private var selectedVirtualHostID: String?
+    @State private var selectedDefaultVirtualHostID: String?
+    @State private var virtualHostHostname: String
+    @State private var virtualHostPort: String
+    @State private var virtualHostDocumentRoot: String
+    @State private var virtualHostEnabled = true
+    @State private var webConfigurationError: String?
+    @State private var adminPort: String
+    @State private var adminNetworkAddress: String
+    @State private var adminSubnetMask: String
+    @State private var adminAllowedNetworks: [TopologyRuntimeWebAdministrationIPv4Network]
+    @State private var adminEnabled: Bool
+    @State private var adminConfigurationError: String?
     @State private var browserAddress: String
     @State private var echoPort: String
     @State private var simpleClientDestination: String
@@ -221,11 +305,15 @@ struct TopologyRuntimeDeviceSheet: View {
         consoleEntries: [String],
         terminalWorkingDirectory: String,
         dhcpLease: TopologyRuntimeDeviceConfiguration?,
-        dnsRecords: [TopologyRuntimeDNSRecord],
+        dnsRecords: [TopologyDNSResourceRecord],
+        dnsRecursiveResolutionEnabled: Bool,
+        dnsForwardingServerIPAddress: String?,
         dnsServerState: TopologyRuntimeServiceProcessState?,
         webServerState: TopologyRuntimeServiceProcessState?,
         webServerConfiguration: TopologyRuntimeWebServerConfiguration,
         webServerRequestLogs: [TopologyRuntimeWebServerRequestLogEntry],
+        webAdministrationConfiguration: TopologyRuntimeWebAdministrationConfiguration,
+        webAdministrationRunning: Bool,
         webBrowserConfiguration: TopologyRuntimeWebBrowserConfiguration,
         webBrowserState: TopologyRuntimeWebBrowserState?,
         echoServerState: TopologyRuntimeServiceProcessState?,
@@ -251,6 +339,7 @@ struct TopologyRuntimeDeviceSheet: View {
         onResetNATTable: @escaping () -> Void,
         onSavePortForwardingRows: @escaping ([TopologyGatewayPortForwardingRow]) -> Void,
         onResetPacketCapture: @escaping () -> Void,
+        onExportPacketCapture: @escaping (UUID?) -> Void,
         onInstallProgram: @escaping (TopologyRuntimeInstallableProgram) -> Void,
         onUninstallProgram: @escaping (TopologyRuntimeInstallableProgram) -> Void,
         onLaunchProgram: @escaping (TopologyRuntimeInstallableProgram) -> Void,
@@ -264,11 +353,16 @@ struct TopologyRuntimeDeviceSheet: View {
         onExecuteCommand: @escaping (String) -> Void,
         onDHCPLease: @escaping (String, String) -> Void,
         onDHCPRelease: @escaping () -> Void,
-        onDNSAddRecord: @escaping (String, String) -> Void,
-        onDNSRemoveRecord: @escaping (String) -> Void,
-        onDNSResolveRecord: @escaping (String) -> Void,
+        onDNSAddTypedRecord: @escaping (String, TopologyDNSRecordType, String, UInt32) -> Void,
+        onDNSRemoveTypedRecord: @escaping (TopologyDNSResourceRecord) -> Void,
+        onDNSResolveTypedRecord: @escaping (String, TopologyDNSRecordType) -> Void,
+        onDNSSetRecursion: @escaping (Bool, String) -> Void,
         onDNSStart: @escaping () -> Void,
         onDNSStop: @escaping () -> Void,
+        onSaveWebServerConfiguration: @escaping (TopologyRuntimeWebServerConfiguration) -> Void,
+        onSaveWebAdministrationConfiguration: @escaping (TopologyRuntimeWebAdministrationConfiguration) -> Void,
+        onWebAdministrationStart: @escaping (String) -> Void,
+        onWebAdministrationStop: @escaping () -> Void,
         onWebStart: @escaping (String) -> Void,
         onWebStop: @escaping () -> Void,
         onWebRestart: @escaping (String) -> Void,
@@ -284,6 +378,7 @@ struct TopologyRuntimeDeviceSheet: View {
         onSaveEmailClientConfiguration: @escaping (TopologyRuntimeEmailClientConfiguration) -> Void,
         onSendEmail: @escaping (TopologyRuntimeEmailMessage) -> Void,
         onRetrieveEmail: @escaping () -> Void,
+        onDeleteEmailMessages: @escaping (TopologyRuntimeEmailClientFolder, [UInt64]) -> Void,
         onSaveEmailServerConfiguration: @escaping (TopologyRuntimeEmailServerConfiguration) -> Void,
         onStartEmailServer: @escaping (TopologyRuntimeEmailServerConfiguration) -> Void,
         onStopEmailServer: @escaping () -> Void,
@@ -338,10 +433,14 @@ struct TopologyRuntimeDeviceSheet: View {
         self.terminalWorkingDirectory = terminalWorkingDirectory
         self.dhcpLease = dhcpLease
         self.dnsRecords = dnsRecords
+        self.dnsRecursiveResolutionEnabled = dnsRecursiveResolutionEnabled
+        self.dnsForwardingServerIPAddress = dnsForwardingServerIPAddress
         self.dnsServerState = dnsServerState
         self.webServerState = webServerState
         self.webServerConfiguration = webServerConfiguration
         self.webServerRequestLogs = webServerRequestLogs
+        self.webAdministrationConfiguration = webAdministrationConfiguration
+        self.webAdministrationRunning = webAdministrationRunning
         self.webBrowserConfiguration = webBrowserConfiguration
         self.webBrowserState = webBrowserState
         self.echoServerState = echoServerState
@@ -367,6 +466,7 @@ struct TopologyRuntimeDeviceSheet: View {
         self.onResetNATTable = onResetNATTable
         self.onSavePortForwardingRows = onSavePortForwardingRows
         self.onResetPacketCapture = onResetPacketCapture
+        self.onExportPacketCapture = onExportPacketCapture
         self.onInstallProgram = onInstallProgram
         self.onUninstallProgram = onUninstallProgram
         self.onLaunchProgram = onLaunchProgram
@@ -380,11 +480,16 @@ struct TopologyRuntimeDeviceSheet: View {
         self.onExecuteCommand = onExecuteCommand
         self.onDHCPLease = onDHCPLease
         self.onDHCPRelease = onDHCPRelease
-        self.onDNSAddRecord = onDNSAddRecord
-        self.onDNSRemoveRecord = onDNSRemoveRecord
-        self.onDNSResolveRecord = onDNSResolveRecord
+        self.onDNSAddTypedRecord = onDNSAddTypedRecord
+        self.onDNSRemoveTypedRecord = onDNSRemoveTypedRecord
+        self.onDNSResolveTypedRecord = onDNSResolveTypedRecord
+        self.onDNSSetRecursion = onDNSSetRecursion
         self.onDNSStart = onDNSStart
         self.onDNSStop = onDNSStop
+        self.onSaveWebServerConfiguration = onSaveWebServerConfiguration
+        self.onSaveWebAdministrationConfiguration = onSaveWebAdministrationConfiguration
+        self.onWebAdministrationStart = onWebAdministrationStart
+        self.onWebAdministrationStop = onWebAdministrationStop
         self.onWebStart = onWebStart
         self.onWebStop = onWebStop
         self.onWebRestart = onWebRestart
@@ -400,6 +505,7 @@ struct TopologyRuntimeDeviceSheet: View {
         self.onSaveEmailClientConfiguration = onSaveEmailClientConfiguration
         self.onSendEmail = onSendEmail
         self.onRetrieveEmail = onRetrieveEmail
+        self.onDeleteEmailMessages = onDeleteEmailMessages
         self.onSaveEmailServerConfiguration = onSaveEmailServerConfiguration
         self.onStartEmailServer = onStartEmailServer
         self.onStopEmailServer = onStopEmailServer
@@ -427,9 +533,32 @@ struct TopologyRuntimeDeviceSheet: View {
         _dhcpLeaseIPAddress = State(initialValue: dhcpLease?.ipAddress ?? "")
         _dhcpLeaseSubnetMask = State(initialValue: dhcpLease?.subnetMask ?? "")
         _dnsHostname = State(initialValue: "")
-        _dnsTargetIPAddress = State(initialValue: "")
+        _dnsTarget = State(initialValue: "")
+        _dnsRecordType = State(initialValue: .address)
+        _dnsTTL = State(initialValue: String(TopologyDNSResourceRecord.defaultTTLSeconds))
         _dnsLookupHostname = State(initialValue: "")
+        _dnsLookupRecordType = State(initialValue: .address)
+        _dnsForwarder = State(initialValue: dnsForwardingServerIPAddress ?? "")
+        _dnsRecursionEnabled = State(initialValue: dnsRecursiveResolutionEnabled)
         _webPort = State(initialValue: String(webServerState?.port ?? webServerConfiguration.port))
+        _webDocumentRoot = State(initialValue: webServerConfiguration.documentRoot)
+        let initialVirtualHost = webServerConfiguration.virtualHostConfiguration?.hosts.first
+        _virtualHostID = State(initialValue: initialVirtualHost?.id ?? "default")
+        _selectedVirtualHostID = State(initialValue: initialVirtualHost?.id)
+        _selectedDefaultVirtualHostID = State(
+            initialValue: webServerConfiguration.virtualHostConfiguration?.defaultHostID
+        )
+        _virtualHostHostname = State(initialValue: initialVirtualHost?.authority.hostname ?? "")
+        _virtualHostPort = State(initialValue: initialVirtualHost?.authority.port.map(String.init) ?? "")
+        _virtualHostDocumentRoot = State(initialValue: initialVirtualHost?.documentRoot ?? webServerConfiguration.documentRoot)
+        _virtualHostEnabled = State(initialValue: initialVirtualHost?.isEnabled ?? true)
+        _webConfigurationError = State(initialValue: nil)
+        _adminConfigurationError = State(initialValue: nil)
+        _adminPort = State(initialValue: String(webAdministrationConfiguration.port))
+        _adminNetworkAddress = State(initialValue: "")
+        _adminSubnetMask = State(initialValue: "255.255.255.0")
+        _adminAllowedNetworks = State(initialValue: webAdministrationConfiguration.accessPolicy.allowedSourceNetworks)
+        _adminEnabled = State(initialValue: webAdministrationConfiguration.accessPolicy.isEnabled)
         _browserAddress = State(initialValue: webBrowserState?.address ?? (webBrowserConfiguration.lastHost.isEmpty ? "" : "http://\(webBrowserConfiguration.lastHost):\(webBrowserConfiguration.lastPort)\(webBrowserConfiguration.lastPath)"))
         _echoPort = State(initialValue: String(echoServerState?.port ?? 55555))
         _simpleClientDestination = State(initialValue: simpleClientState?.destinationIPAddress ?? "")
@@ -605,15 +734,32 @@ struct TopologyRuntimeDeviceSheet: View {
             )
             .accessibilityIdentifier("runtime.device.remote-link.status")
 
+            if let configuration = remoteLinkConfiguration {
+                LabeledContent(
+                    FiliusLocalization.t("runtime.remote.transport"),
+                    value: configuration.transportMode == .localNetwork
+                        ? FiliusLocalization.t("remoteLink.transport.localNetwork")
+                        : FiliusLocalization.t("remoteLink.transport.inProject")
+                )
+                if configuration.transportMode == .localNetwork {
+                    LabeledContent(
+                        FiliusLocalization.t("runtime.remote.role"),
+                        value: configuration.lanRole == .host
+                            ? FiliusLocalization.t("remoteLink.role.host")
+                            : FiliusLocalization.t("remoteLink.role.join")
+                    )
+                }
+            }
+
             LabeledContent(
                 FiliusLocalization.t("editor.field.pairID"),
-                value: remoteLinkConfiguration?.pairIdentifier.ifEmpty("â€”") ?? "â€”"
+                value: remoteLinkConfiguration?.pairIdentifier.ifEmpty("—") ?? "—"
             )
             .accessibilityIdentifier("runtime.device.remote-link.pair-id")
 
             LabeledContent(
                 FiliusLocalization.t("runtime.remote.deterministicLatency"),
-                value: remoteLinkConfiguration.map { FiliusLocalization.t("runtime.milliseconds", $0.latencyMilliseconds) } ?? "â€”"
+                value: remoteLinkConfiguration.map { FiliusLocalization.t("runtime.milliseconds", $0.latencyMilliseconds) } ?? "—"
             )
             .accessibilityIdentifier("runtime.device.remote-link.latency-ms")
 
@@ -670,9 +816,15 @@ struct TopologyRuntimeDeviceSheet: View {
             return FiliusLocalization.t("runtime.remote.waitPartner")
         case let .ambiguous(enabledNodeCount):
             return FiliusLocalization.t("runtime.remote.ambiguous", enabledNodeCount)
-        case .detached:
+        case .detached, .detachedLAN:
             return FiliusLocalization.t("runtime.remote.detached")
-        case .active:
+        case .waitingForPeer:
+            return FiliusLocalization.t("runtime.remote.waitPartner")
+        case .connecting:
+            return FiliusLocalization.t("runtime.remote.connecting")
+        case let .connectionFailed(message):
+            return FiliusLocalization.t("runtime.remote.failed", message)
+        case .active, .activeLAN:
             return FiliusLocalization.t("runtime.remote.active")
         }
     }
@@ -682,6 +834,8 @@ struct TopologyRuntimeDeviceSheet: View {
         switch condition {
         case let .active(partnerNodeID), let .detached(partnerNodeID):
             return partnerNodeID.uuidString
+        case let .activeLAN(peerName):
+            return peerName
         default:
             break
         }
@@ -763,6 +917,8 @@ struct TopologyRuntimeDeviceSheet: View {
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("runtime.device.router.firewall.configure")
 
+            webAdministrationControlsSection
+
         case .gateway:
             infrastructureConfigurationSection(
                 title: FiliusLocalization.t("runtime.gateway.configuration.title"),
@@ -792,11 +948,180 @@ struct TopologyRuntimeDeviceSheet: View {
                 .accessibilityIdentifier("runtime.device.gateway.port-forwarding.configure")
             }
 
+            webAdministrationControlsSection
+
         case .remoteLink:
             remoteLinkInfoSection
 
         case .unsupported:
             unsupportedInfoSection
+        }
+    }
+
+    private var webAdministrationControlsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(FiliusLocalization.t("runtime.webAdministration.title"))
+                .font(.subheadline.weight(.semibold))
+                .accessibilityIdentifier("runtime.device.web-administration.title")
+            Text(FiliusLocalization.t("runtime.webAdministration.detail"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Toggle(
+                FiliusLocalization.t("runtime.webAdministration.enabled"),
+                isOn: $adminEnabled
+            )
+            .accessibilityIdentifier("runtime.device.web-administration.enabled")
+
+            TextField(FiliusLocalization.t("runtime.webAdministration.port"), text: $adminPort)
+                .keyboardType(.numberPad)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("runtime.device.web-administration.port")
+            TextField(FiliusLocalization.t("runtime.webAdministration.sourceNetwork"), text: $adminNetworkAddress)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("runtime.device.web-administration.network")
+            TextField(FiliusLocalization.t("runtime.webAdministration.sourceSubnetMask"), text: $adminSubnetMask)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("runtime.device.web-administration.mask")
+
+            Button(FiliusLocalization.t("runtime.webAdministration.addNetwork")) {
+                addWebAdministrationNetwork()
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("runtime.device.web-administration.add-network")
+
+            if adminAllowedNetworks.isEmpty {
+                Text(FiliusLocalization.t("runtime.webAdministration.noNetworks"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("runtime.device.web-administration.networks.empty")
+            } else {
+                ForEach(adminAllowedNetworks, id: \.self) { network in
+                    HStack(spacing: 8) {
+                        Text("\(network.networkAddress) / \(network.subnetMask)")
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                        Spacer()
+                        Button(role: .destructive) {
+                            removeWebAdministrationNetwork(network)
+                        } label: {
+                            Label(
+                                FiliusLocalization.t("runtime.webAdministration.removeNetwork"),
+                                systemImage: "trash"
+                            )
+                            .labelStyle(.iconOnly)
+                        }
+                        .accessibilityLabel(FiliusLocalization.t("runtime.webAdministration.removeNetwork"))
+                        .accessibilityIdentifier("runtime.device.web-administration.remove-network.\(network.networkAddress).\(network.subnetMask)")
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button(FiliusLocalization.t("runtime.webAdministration.save")) {
+                    _ = saveWebAdministrationPolicy()
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("runtime.device.web-administration.save")
+
+                Button(
+                    webAdministrationRunning
+                        ? FiliusLocalization.t("runtime.webAdministration.stop")
+                        : FiliusLocalization.t("runtime.webAdministration.start")
+                ) {
+                    if webAdministrationRunning {
+                        onWebAdministrationStop()
+                    } else if !adminEnabled {
+                        adminConfigurationError = FiliusLocalization.t("runtime.webAdministration.enableRequired")
+                    } else if saveWebAdministrationPolicy() {
+                        onWebAdministrationStart(adminPort)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("runtime.device.web-administration.toggle")
+            }
+
+            Text(
+                FiliusLocalization.t(
+                    "runtime.webAdministration.status",
+                    webAdministrationRunning
+                        ? FiliusLocalization.t("runtime.status.running")
+                        : FiliusLocalization.t("runtime.status.stopped")
+                )
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("runtime.device.web-administration.status")
+
+            if let adminConfigurationError {
+                Text(adminConfigurationError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("runtime.device.web-administration.error")
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("runtime.device.web-administration")
+    }
+
+    @discardableResult
+    private func saveWebAdministrationPolicy() -> Bool {
+        guard !adminEnabled || !adminAllowedNetworks.isEmpty else {
+            adminConfigurationError = FiliusLocalization.t("runtime.webAdministration.networkRequired")
+            return false
+        }
+        guard let port = Int(adminPort.trimmingCharacters(in: .whitespacesAndNewlines)),
+              (1...65_535).contains(port)
+        else {
+            adminConfigurationError = FiliusLocalization.t("runtime.webAdministration.invalidPort")
+            return false
+        }
+        adminPort = String(port)
+        adminConfigurationError = nil
+        onSaveWebAdministrationConfiguration(
+            TopologyRuntimeWebAdministrationConfiguration(
+                port: port,
+                accessPolicy: TopologyRuntimeWebAdministrationAccessPolicy(
+                    isEnabled: adminEnabled,
+                    allowedSourceNetworks: adminAllowedNetworks
+                )
+            )
+        )
+        return true
+    }
+
+    private func addWebAdministrationNetwork() {
+        let networkText = adminNetworkAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let maskText = adminSubnetMask.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let network = try? TopologyRuntimeWebAdministrationIPv4Network(
+            networkAddress: networkText,
+            subnetMask: maskText
+        ) else {
+            adminConfigurationError = FiliusLocalization.t("runtime.webAdministration.invalidNetwork")
+            return
+        }
+        adminAllowedNetworks = TopologyRuntimeWebAdministrationAccessPolicy(
+            isEnabled: adminEnabled,
+            allowedSourceNetworks: adminAllowedNetworks + [network]
+        ).allowedSourceNetworks
+        adminNetworkAddress = ""
+        adminConfigurationError = nil
+    }
+
+    private func removeWebAdministrationNetwork(
+        _ network: TopologyRuntimeWebAdministrationIPv4Network
+    ) {
+        adminAllowedNetworks.removeAll { $0 == network }
+        if adminEnabled && adminAllowedNetworks.isEmpty {
+            adminConfigurationError = FiliusLocalization.t("runtime.webAdministration.networkRequired")
+        } else {
+            adminConfigurationError = nil
         }
     }
 
@@ -870,7 +1195,7 @@ struct TopologyRuntimeDeviceSheet: View {
                         .zIndex(3)
                 }
 
-                if isRuntimeNetworkInfoExpanded {
+                if isRuntimeDesktopVisible && isRuntimeNetworkInfoExpanded {
                     runtimeNetworkInfoPanel
                         .frame(maxWidth: compact ? 330 : 390)
                         .padding(.trailing, 12)
@@ -1065,6 +1390,7 @@ struct TopologyRuntimeDeviceSheet: View {
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
             }
+            .accessibilityIdentifier("runtime.workspace.contentScroll")
             .scrollIndicators(.visible)
             .background(Color(uiColor: .systemBackground))
         }
@@ -1276,7 +1602,8 @@ struct TopologyRuntimeDeviceSheet: View {
                 tabs: packetCaptureTabs,
                 rows: packetMessageRows,
                 packetLayerPath: packetLayerPath,
-                onReset: onResetPacketCapture
+                onReset: onResetPacketCapture,
+                onExport: onExportPacketCapture
             )
         } label: {
             Label(FiliusLocalization.t("ui.69c4593fb91f"), systemImage: "arrow.left.arrow.right")
@@ -1685,82 +2012,13 @@ struct TopologyRuntimeDeviceSheet: View {
     }
 
     private var emailClientShell: some View {
-        TopologyRuntimeEmailClientView(
+        TopologyRuntimeEmailReplyDeletionView(
             configuration: emailClientConfiguration,
             state: emailClientState,
-            configurationFields: { configuration in
-                TopologyRuntimeEmailClientView.AccountFields(
-                    name: configuration.name,
-                    emailAddress: configuration.email,
-                    username: configuration.username,
-                    password: configuration.password,
-                    smtpHost: configuration.smtpHost,
-                    smtpPort: String(configuration.smtpPort),
-                    pop3Host: configuration.pop3Host,
-                    pop3Port: String(configuration.pop3Port)
-                )
-            },
-            stateFields: { state in
-                TopologyRuntimeEmailClientView.StateFields(
-                    statusLocalizationKey: state.lastError == nil
-                        ? (state.activeOperation == "retrieving"
-                            ? "email.client.status.retrieving"
-                            : (state.isBusy ? "email.client.status.sending" : "email.client.status.idle"))
-                        : "email.client.status.error",
-                    detail: state.lastError,
-                    canSend: !state.isBusy,
-                    canRetrieve: !state.isBusy
-                )
-            },
-            inboxMessages: { _ in emailClientConfiguration.inbox },
-            sentMessages: { _ in emailClientConfiguration.sent },
-            logs: { $0.logs },
-            messageFields: { message in
-                TopologyRuntimeEmailClientView.MessageFields(
-                    id: String(message.id),
-                    sender: message.from,
-                    to: message.to,
-                    cc: message.cc,
-                    bcc: message.bcc,
-                    subject: message.subject,
-                    body: message.body,
-                    timestamp: message.receivedAtMilliseconds.map(String.init) ?? ""
-                )
-            },
-            addressText: { $0.javaString },
-            logFields: { entry in
-                TopologyRuntimeEmailClientView.LogFields(
-                    id: String(entry.id),
-                    timestamp: String(entry.timestampMilliseconds),
-                    message: FiliusLocalization.t("email.logs.entry", entry.protocolName, entry.direction, entry.message)
-                )
-            },
-            onSaveConfiguration: { fields in
-                let smtpPort = Int(fields.smtpPort) ?? 0
-                let pop3Port = Int(fields.pop3Port) ?? 0
-                var configuration = emailClientConfiguration
-                configuration.name = fields.name
-                configuration.email = fields.emailAddress
-                configuration.username = fields.username
-                configuration.password = fields.password
-                configuration.smtpHost = fields.smtpHost
-                configuration.smtpPort = smtpPort
-                configuration.pop3Host = fields.pop3Host
-                configuration.pop3Port = pop3Port
-                onSaveEmailClientConfiguration(configuration)
-            },
-            onSend: { fields in
-                let message = TopologyRuntimeEmailMessage(
-                    from: emailClientConfiguration.address,
-                    to: parsedEmailAddresses(fields.to),
-                    cc: parsedEmailAddresses(fields.cc),
-                    bcc: parsedEmailAddresses(fields.bcc),
-                    subject: fields.subject,
-                    body: fields.body
-                )
-                onSendEmail(message)
-            },
-            onRetrieve: onRetrieveEmail
+            onSaveConfiguration: onSaveEmailClientConfiguration,
+            onSend: onSendEmail,
+            onRetrieve: onRetrieveEmail,
+            onDeleteMessages: onDeleteEmailMessages
         )
     }
 
@@ -2016,10 +2274,8 @@ struct TopologyRuntimeDeviceSheet: View {
         )
     }
 
-    private var dnsServiceRecords: [TopologyRuntimeDNSRecord] {
-        dnsRecords.sorted { lhs, rhs in
-            lhs.hostname < rhs.hostname
-        }
+    private var dnsServiceRecords: [TopologyDNSResourceRecord] {
+        dnsRecords.sorted(by: TopologyDNSResourceRecord.deterministicOrder)
     }
 
     private static func initialDirectoryPath(
@@ -2430,7 +2686,7 @@ struct TopologyRuntimeDeviceSheet: View {
                 .accessibilityIdentifier("runtime.device.app.dns.title")
 
             HStack(spacing: 8) {
-                Text(dnsServerState == nil ? "Stopped" : "Running on UDP 53")
+                Text(dnsServerState == nil ? FiliusLocalization.t("runtime.workspace.stopped") : FiliusLocalization.t("runtime.dnsStatus"))
                     .font(.caption)
                     .foregroundStyle(dnsServerState == nil ? Color.secondary : Color.green)
                     .accessibilityIdentifier("runtime.device.app.dns.status")
@@ -2441,32 +2697,66 @@ struct TopologyRuntimeDeviceSheet: View {
                 .accessibilityIdentifier("runtime.device.app.dns.lifecycle")
             }
 
+            Toggle(FiliusLocalization.t("runtime.dns.recursive"), isOn: $dnsRecursionEnabled)
+                .accessibilityIdentifier("runtime.device.app.dns.recursive")
+
+            TextField(FiliusLocalization.t("runtime.dns.forwarder"), text: $dnsForwarder)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.numbersAndPunctuation)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("runtime.device.app.dns.forwarder")
+
+            Button(FiliusLocalization.t("common.save")) {
+                onDNSSetRecursion(dnsRecursionEnabled, dnsForwarder)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("runtime.device.app.dns.recursion.save")
+
+            Text(FiliusLocalization.t("runtime.dns.recordType"))
+                .font(.caption.weight(.semibold))
+            Picker(FiliusLocalization.t("runtime.dns.recordType"), selection: $dnsRecordType) {
+                ForEach(TopologyDNSRecordType.allCases, id: \.self) { type in
+                    Text(type.rawValue).tag(type)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("runtime.device.app.dns.recordType")
+
             TextField(FiliusLocalization.t("runtime.field.hostname"), text: $dnsHostname)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("runtime.device.app.dns.hostname")
 
-            TextField(FiliusLocalization.t("runtime.field.ipv4Target"), text: $dnsTargetIPAddress)
+            TextField(dnsRecordType == .address ? FiliusLocalization.t("runtime.field.ipv4Target") : FiliusLocalization.t("runtime.dns.target"), text: $dnsTarget)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .keyboardType(.numbersAndPunctuation)
+                .keyboardType(dnsRecordType == .address ? .numbersAndPunctuation : .URL)
                 .textFieldStyle(.roundedBorder)
-                .accessibilityIdentifier("runtime.device.app.dns.targetIP")
+                .accessibilityIdentifier("runtime.device.app.dns.target")
 
-            HStack(spacing: 8) {
-                Button(FiliusLocalization.t("ui.26e7da5e099a")) {
-                    onDNSAddRecord(dnsHostname, dnsTargetIPAddress)
-                }
-                .buttonStyle(.borderedProminent)
-                .accessibilityIdentifier("runtime.device.app.dns.add")
+            TextField(FiliusLocalization.t("runtime.dns.ttl"), text: $dnsTTL)
+                .keyboardType(.numberPad)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("runtime.device.app.dns.ttl")
 
-                Button(FiliusLocalization.t("ui.27ce64c41ff2")) {
-                    onDNSRemoveRecord(dnsHostname)
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("runtime.device.app.dns.remove")
+            Button(FiliusLocalization.t("ui.26e7da5e099a")) {
+                guard let ttl = UInt32(dnsTTL.trimmingCharacters(in: .whitespacesAndNewlines)), ttl > 0 else { return }
+                onDNSAddTypedRecord(dnsHostname, dnsRecordType, dnsTarget, ttl)
             }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("runtime.device.app.dns.add")
+
+            Text(FiliusLocalization.t("runtime.field.resolveHostname"))
+                .font(.caption.weight(.semibold))
+            Picker(FiliusLocalization.t("runtime.dns.lookupType"), selection: $dnsLookupRecordType) {
+                ForEach(TopologyDNSRecordType.allCases, id: \.self) { type in
+                    Text(type.rawValue).tag(type)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("runtime.device.app.dns.lookupType")
 
             TextField(FiliusLocalization.t("runtime.field.resolveHostname"), text: $dnsLookupHostname)
                 .textInputAutocapitalization(.never)
@@ -2475,7 +2765,7 @@ struct TopologyRuntimeDeviceSheet: View {
                 .accessibilityIdentifier("runtime.device.app.dns.lookupHost")
 
             Button(FiliusLocalization.t("ui.ac7f958cc028")) {
-                onDNSResolveRecord(dnsLookupHostname)
+                onDNSResolveTypedRecord(dnsLookupHostname, dnsLookupRecordType)
             }
             .buttonStyle(.bordered)
             .accessibilityIdentifier("runtime.device.app.dns.resolve")
@@ -2486,10 +2776,20 @@ struct TopologyRuntimeDeviceSheet: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("runtime.device.app.dns.records.empty")
             } else {
-                ForEach(dnsServiceRecords, id: \.hostname) { record in
-                    Text(FiliusLocalization.t("runtime.dnsRecord", record.hostname, record.targetIPAddress))
-                        .font(.caption.monospaced())
-                        .accessibilityIdentifier("runtime.device.app.dns.record.\(record.hostname)")
+                ForEach(dnsServiceRecords, id: \.self) { record in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("\(record.name.absoluteString) \(record.type.rawValue) \(record.ttlSeconds) \(record.target)")
+                            .font(.caption.monospaced())
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button(role: .destructive) {
+                            onDNSRemoveTypedRecord(record)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel(FiliusLocalization.t("ui.27ce64c41ff2"))
+                    }
+                    .accessibilityIdentifier("runtime.device.app.dns.record.\(record.name.rawValue).\(record.type.rawValue).\(record.target)")
                 }
             }
         }
@@ -2534,25 +2834,133 @@ struct TopologyRuntimeDeviceSheet: View {
                 .keyboardType(.numberPad)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("runtime.device.app.web.port")
+            TextField(FiliusLocalization.t("runtime.web.documentRoot"), text: $webDocumentRoot)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("runtime.device.app.web.document-root")
 
             HStack(spacing: 8) {
-                Button(FiliusLocalization.t("ui.952f375412e8")) {
-                    onWebStart(webPort)
-                }
-                .buttonStyle(.borderedProminent)
-                .accessibilityIdentifier("runtime.device.app.web.start")
-
-                Button(FiliusLocalization.t("ui.9e253470c876")) {
-                    onWebStop()
+                Button(FiliusLocalization.t("runtime.web.saveConfiguration")) {
+                    saveWebServerConfiguration()
                 }
                 .buttonStyle(.bordered)
-                .accessibilityIdentifier("runtime.device.app.web.stop")
+                .accessibilityIdentifier("runtime.device.app.web.save")
+                Button(FiliusLocalization.t("ui.952f375412e8")) { onWebStart(webPort) }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("runtime.device.app.web.start")
+                Button(FiliusLocalization.t("ui.9e253470c876")) { onWebStop() }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("runtime.device.app.web.stop")
+                Button(FiliusLocalization.t("runtime.web.restartAction")) { onWebRestart(webPort) }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("runtime.device.app.web.restart")
+            }
 
-                Button(FiliusLocalization.t("runtime.web.restartAction")) {
-                    onWebRestart(webPort)
+            Text(FiliusLocalization.t("runtime.web.virtualHosts"))
+                .font(.caption.weight(.semibold))
+            TextField(FiliusLocalization.t("runtime.web.virtualHostID"), text: $virtualHostID)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("runtime.device.app.web.virtual-host.id")
+            TextField(FiliusLocalization.t("runtime.web.virtualHostName"), text: $virtualHostHostname)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("runtime.device.app.web.virtual-host.hostname")
+            HStack(spacing: 8) {
+                TextField(FiliusLocalization.t("runtime.web.virtualHostPort"), text: $virtualHostPort)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("runtime.device.app.web.virtual-host.port")
+                TextField(FiliusLocalization.t("runtime.web.virtualHostRoot"), text: $virtualHostDocumentRoot)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("runtime.device.app.web.virtual-host.root")
+            }
+            Toggle(FiliusLocalization.t("runtime.web.virtualHostEnabled"), isOn: $virtualHostEnabled)
+                .accessibilityIdentifier("runtime.device.app.web.virtual-host.enabled")
+            HStack(spacing: 8) {
+                Button(FiliusLocalization.t("runtime.web.virtualHostSave")) { saveVirtualHost() }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("runtime.device.app.web.virtual-host.save")
+                Button(FiliusLocalization.t("ui.8955ab6bc1d4")) { clearVirtualHostEditor() }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("runtime.device.app.web.virtual-host.new")
+                if webServerConfiguration.virtualHostConfiguration != nil {
+                    Button(FiliusLocalization.t("runtime.web.virtualHostClear")) {
+                        onSaveWebServerConfiguration(
+                            TopologyRuntimeWebServerConfiguration(
+                                port: Int(webPort) ?? webServerConfiguration.port,
+                                documentRoot: webDocumentRoot,
+                                virtualHostConfiguration: nil
+                            )
+                        )
+                        selectedVirtualHostID = nil
+                        selectedDefaultVirtualHostID = nil
+                        clearVirtualHostEditor()
+                        webConfigurationError = nil
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("runtime.device.app.web.virtual-host.clear")
                 }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("runtime.device.app.web.restart")
+            }
+            if let configuration = webServerConfiguration.virtualHostConfiguration {
+                Picker(
+                    FiliusLocalization.t("runtime.web.virtualHostDefault"),
+                    selection: Binding(
+                        get: { selectedDefaultVirtualHostID ?? configuration.defaultHostID },
+                        set: { setDefaultVirtualHost($0) }
+                    )
+                ) {
+                    ForEach(configuration.hosts.filter(\.isEnabled)) { host in
+                        Text(host.id).tag(host.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .accessibilityIdentifier("runtime.device.app.web.virtual-host.default")
+
+                ForEach(configuration.hosts) { host in
+                    HStack {
+                        Button { selectVirtualHost(host) } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(host.id) · \(host.authority.hostname)\(host.authority.port.map { ":\($0)" } ?? "")")
+                                    .font(.caption.monospaced())
+                                Text(host.documentRoot)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("runtime.device.app.web.virtual-host.edit.\(host.id)")
+                        if host.id == configuration.defaultHostID {
+                            Text(FiliusLocalization.t("runtime.web.virtualHostDefault"))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Button(role: .destructive) { removeVirtualHost(host) } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("runtime.device.app.web.virtual-host.delete.\(host.id)")
+                    }
+                    .padding(6)
+                    .background(
+                        selectedVirtualHostID == host.id ? Color.accentColor.opacity(0.12) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 6)
+                    )
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("runtime.device.app.web.virtual-host.\(host.id)")
+                }
+            }
+            if let webConfigurationError {
+                Text(webConfigurationError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("runtime.device.app.web.error")
             }
 
             Text(webServerSummary)
@@ -2564,7 +2972,7 @@ struct TopologyRuntimeDeviceSheet: View {
                 Text(FiliusLocalization.t("runtime.web.requestLog"))
                     .font(.caption.weight(.semibold))
                 ForEach(webServerRequestLogs.suffix(8)) { entry in
-                    Text("\(entry.method) \(entry.path) â†’ \(entry.statusCode) (\(entry.remoteIPAddress))")
+                    Text("\(entry.method) \(entry.path) → \(entry.statusCode) (\(entry.remoteIPAddress))")
                         .font(.caption2.monospaced())
                         .accessibilityIdentifier("runtime.device.app.web.log.\(entry.id)")
                 }
@@ -2572,6 +2980,142 @@ struct TopologyRuntimeDeviceSheet: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("runtime.device.app.web.shell")
+    }
+
+    private func saveWebServerConfiguration() {
+        guard let port = Int(webPort), (1...65_535).contains(port) else {
+            webConfigurationError = FiliusLocalization.t("runtime.web.invalidPort")
+            return
+        }
+        let configuration = TopologyRuntimeWebServerConfiguration(
+            port: port,
+            documentRoot: webDocumentRoot,
+            virtualHostConfiguration: webServerConfiguration.virtualHostConfiguration
+        )
+        do {
+            try configuration.validate()
+        } catch {
+            webConfigurationError = error.localizedDescription
+            return
+        }
+        onSaveWebServerConfiguration(configuration)
+        webConfigurationError = nil
+    }
+
+    private func saveVirtualHost() {
+        guard let port = virtualHostPort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nil
+            : UInt16(virtualHostPort),
+            virtualHostPort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || port != 0,
+            !virtualHostID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            !virtualHostHostname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            webConfigurationError = FiliusLocalization.t("runtime.web.invalidVirtualHost")
+            return
+        }
+        guard let host = try? TopologyRuntimeWebVirtualHost(
+            id: virtualHostID,
+            hostname: virtualHostHostname,
+            port: port,
+            documentRoot: virtualHostDocumentRoot,
+            isEnabled: virtualHostEnabled
+        ) else {
+            webConfigurationError = FiliusLocalization.t("runtime.web.invalidVirtualHost")
+            return
+        }
+        let configuration: TopologyRuntimeWebVirtualHostConfiguration
+        do {
+            configuration = try TopologyRuntimeVirtualHostEditor.saving(
+                host,
+                selectedHostID: selectedVirtualHostID,
+                selectedDefaultHostID: selectedDefaultVirtualHostID,
+                in: webServerConfiguration.virtualHostConfiguration
+            )
+        } catch {
+            webConfigurationError = error.localizedDescription
+            return
+        }
+        guard let webPortValue = Int(webPort), (1...65_535).contains(webPortValue) else {
+            webConfigurationError = FiliusLocalization.t("runtime.web.invalidPort")
+            return
+        }
+        onSaveWebServerConfiguration(
+            TopologyRuntimeWebServerConfiguration(
+                port: webPortValue,
+                documentRoot: webDocumentRoot,
+                virtualHostConfiguration: configuration
+            )
+        )
+        selectedVirtualHostID = host.id
+        selectedDefaultVirtualHostID = configuration.defaultHostID
+        webConfigurationError = nil
+    }
+
+    private func selectVirtualHost(_ host: TopologyRuntimeWebVirtualHost) {
+        selectedVirtualHostID = host.id
+        virtualHostID = host.id
+        virtualHostHostname = host.authority.hostname
+        virtualHostPort = host.authority.port.map(String.init) ?? ""
+        virtualHostDocumentRoot = host.documentRoot
+        virtualHostEnabled = host.isEnabled
+        webConfigurationError = nil
+    }
+
+    private func clearVirtualHostEditor() {
+        selectedVirtualHostID = nil
+        virtualHostID = ""
+        virtualHostHostname = ""
+        virtualHostPort = ""
+        virtualHostDocumentRoot = webDocumentRoot
+        virtualHostEnabled = true
+        webConfigurationError = nil
+    }
+
+    private func setDefaultVirtualHost(_ hostID: String) {
+        guard let existing = webServerConfiguration.virtualHostConfiguration,
+              existing.hosts.contains(where: { $0.id == hostID && $0.isEnabled }),
+              let configuration = try? TopologyRuntimeWebVirtualHostConfiguration(
+                hosts: existing.hosts,
+                defaultHostID: hostID
+              )
+        else {
+            webConfigurationError = FiliusLocalization.t("runtime.web.invalidVirtualHost")
+            return
+        }
+        onSaveWebServerConfiguration(
+            TopologyRuntimeWebServerConfiguration(
+                port: Int(webPort) ?? webServerConfiguration.port,
+                documentRoot: webDocumentRoot,
+                virtualHostConfiguration: configuration
+            )
+        )
+        selectedDefaultVirtualHostID = hostID
+        webConfigurationError = nil
+    }
+
+    private func removeVirtualHost(_ host: TopologyRuntimeWebVirtualHost) {
+        guard let existing = webServerConfiguration.virtualHostConfiguration else { return }
+        let configuration: TopologyRuntimeWebVirtualHostConfiguration?
+        do {
+            configuration = try TopologyRuntimeVirtualHostEditor.removing(
+                hostID: host.id,
+                from: existing
+            )
+        } catch {
+            webConfigurationError = error.localizedDescription
+            return
+        }
+        onSaveWebServerConfiguration(
+            TopologyRuntimeWebServerConfiguration(
+                port: Int(webPort) ?? webServerConfiguration.port,
+                documentRoot: webDocumentRoot,
+                virtualHostConfiguration: configuration
+            )
+        )
+        selectedDefaultVirtualHostID = configuration?.defaultHostID
+        if selectedVirtualHostID == host.id {
+            clearVirtualHostEditor()
+        }
     }
 
     private var webBrowserShell: some View {
@@ -2591,8 +3135,12 @@ struct TopologyRuntimeDeviceSheet: View {
                     .accessibilityIdentifier("runtime.device.app.browser.go")
                 Button(FiliusLocalization.t("runtime.browser.back")) { onWebBrowserBack() }
                     .buttonStyle(.bordered)
+                    .disabled(!(webBrowserState?.canNavigateBack ?? false))
+                    .accessibilityIdentifier("runtime.device.app.browser.back")
                 Button(FiliusLocalization.t("runtime.browser.forward")) { onWebBrowserForward() }
                     .buttonStyle(.bordered)
+                    .disabled(!(webBrowserState?.canNavigateForward ?? false))
+                    .accessibilityIdentifier("runtime.device.app.browser.forward")
                 Button(FiliusLocalization.t("runtime.browser.clear")) { onWebBrowserReset() }
                     .buttonStyle(.bordered)
             }
@@ -2606,25 +3154,7 @@ struct TopologyRuntimeDeviceSheet: View {
                         .foregroundStyle(.red)
                         .accessibilityIdentifier("runtime.device.app.browser.error")
                 }
-                Group {
-                    if webBrowserState.body.isEmpty {
-                        ScrollView {
-                            Text(FiliusLocalization.t("runtime.browser.emptyResponse"))
-                                .font(.caption.monospaced())
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(8)
-                        }
-                    } else if webBrowserState.shouldRenderBodyAsHTML {
-                        RuntimeHTMLWebView(html: webBrowserState.body)
-                    } else {
-                        ScrollView {
-                            Text(webBrowserState.body)
-                                .font(.caption.monospaced())
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(8)
-                        }
-                    }
-                }
+                webBrowserBody(webBrowserState)
                 .frame(minHeight: 100, maxHeight: 220)
                 .background(Color(uiColor: .systemBackground))
                 .clipShape(.rect(cornerRadius: 8))
@@ -2634,7 +3164,7 @@ struct TopologyRuntimeDeviceSheet: View {
                 }
                 .accessibilityIdentifier("runtime.device.app.browser.body")
                 if !webBrowserState.history.isEmpty {
-                    Text(FiliusLocalization.t("runtime.browser.history", webBrowserState.history.map(\.address).joined(separator: " â†’ ")))
+                    Text(FiliusLocalization.t("runtime.browser.history", webBrowserState.history.map(\.address).joined(separator: " → ")))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -2645,6 +3175,39 @@ struct TopologyRuntimeDeviceSheet: View {
         .onChange(of: webBrowserState?.address) { _, newAddress in
             browserAddress = newAddress ?? ""
         }
+    }
+
+    @ViewBuilder
+    private func webBrowserBody(_ state: TopologyRuntimeWebBrowserState) -> some View {
+        if state.body.isEmpty {
+            ScrollView {
+                Text(FiliusLocalization.t("runtime.browser.emptyResponse"))
+                    .font(.caption.monospaced())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
+        } else if state.shouldRenderBodyAsHTML {
+            RuntimeHTMLWebView(
+                html: state.body,
+                currentAddress: state.address,
+                onSimulatedRequest: handleSimulatedBrowserRequest
+            )
+        } else {
+            ScrollView {
+                Text(state.body)
+                    .font(.caption.monospaced())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
+        }
+    }
+
+    private func handleSimulatedBrowserRequest(_ request: TopologyRuntimeWebBrowserRequest) {
+        guard let encodedAddress = request.encodedNavigationAddress else {
+            browserAddress = request.address
+            return
+        }
+        onWebBrowserNavigate(encodedAddress)
     }
 
     private var echoServerShell: some View {
@@ -4635,6 +5198,7 @@ private struct TopologyPacketExchangeDestination: View {
     let rows: [TopologyPacketMessageRow]
     let packetLayerPath: (TopologyPacketCaptureIdentity, Bool) -> TopologyPacketLayerPath
     let onReset: () -> Void
+    let onExport: (UUID?) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -4644,6 +5208,7 @@ private struct TopologyPacketExchangeDestination: View {
             rows: rows,
             packetLayerPath: packetLayerPath,
             onReset: onReset,
+            onExport: onExport,
             onClose: { dismiss() }
         )
         .padding(16)
@@ -4664,6 +5229,7 @@ private struct TopologyLayeredExchangeWindow: View {
     let rows: [TopologyPacketMessageRow]
     let packetLayerPath: (TopologyPacketCaptureIdentity, Bool) -> TopologyPacketLayerPath
     let onReset: () -> Void
+    let onExport: (UUID?) -> Void
     let onClose: () -> Void
 
     @State private var selectedInterfaceID: UUID?
@@ -4680,12 +5246,14 @@ private struct TopologyLayeredExchangeWindow: View {
         rows: [TopologyPacketMessageRow],
         packetLayerPath: @escaping (TopologyPacketCaptureIdentity, Bool) -> TopologyPacketLayerPath,
         onReset: @escaping () -> Void,
+        onExport: @escaping (UUID?) -> Void,
         onClose: @escaping () -> Void
     ) {
         self.tabs = tabs
         self.rows = rows
         self.packetLayerPath = packetLayerPath
         self.onReset = onReset
+        self.onExport = onExport
         self.onClose = onClose
         _selectedInterfaceID = State(initialValue: tabs.first?.interfaceID)
     }
@@ -4764,6 +5332,7 @@ private struct TopologyLayeredExchangeWindow: View {
                         .font(.caption)
                         .accessibilityIdentifier("runtime.packet-exchange.autoscroll")
                     Spacer()
+                    exportButton
                     resetButton
                 }
             }
@@ -4784,6 +5353,7 @@ private struct TopologyLayeredExchangeWindow: View {
                 Toggle(FiliusLocalization.t("ui.76b972ba949f"), isOn: $autoscroll)
                     .font(.caption)
                     .accessibilityIdentifier("runtime.packet-exchange.autoscroll")
+                exportButton
                 resetButton
                 Button(action: onClose) { Image(systemName: "xmark") }
                     .buttonStyle(.bordered)
@@ -4794,6 +5364,17 @@ private struct TopologyLayeredExchangeWindow: View {
             .frame(height: 38)
             .background(Color(uiColor: .systemBackground))
         }
+    }
+
+    private var exportButton: some View {
+        Button {
+            onExport(selectedInterfaceID)
+        } label: {
+            Label(FiliusLocalization.t("packet.export.action"), systemImage: "square.and.arrow.up")
+        }
+        .buttonStyle(.bordered)
+        .disabled(tabs.isEmpty)
+        .accessibilityIdentifier("runtime.packet-exchange.export")
     }
 
     private var resetButton: some View {
@@ -5394,9 +5975,11 @@ enum RuntimeHTMLDocumentIsolation {
 
 private struct RuntimeHTMLWebView: UIViewRepresentable {
     let html: String
+    let currentAddress: String
+    let onSimulatedRequest: (TopologyRuntimeWebBrowserRequest) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(onSimulatedRequest: onSimulatedRequest)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -5414,33 +5997,569 @@ private struct RuntimeHTMLWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.loadedHTML != html else {
-            return
-        }
+        context.coordinator.onSimulatedRequest = onSimulatedRequest
+        context.coordinator.currentAddress = currentAddress
+        guard context.coordinator.loadedHTML != html
+            || context.coordinator.loadedAddress != currentAddress
+        else { return }
 
         context.coordinator.loadedHTML = html
+        context.coordinator.loadedAddress = currentAddress
         webView.loadHTMLString(
             RuntimeHTMLDocumentIsolation.document(containing: html),
-            baseURL: nil
+            baseURL: URL(string: currentAddress)
         )
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var loadedHTML: String?
+        var loadedAddress: String?
+        var currentAddress = ""
+        var onSimulatedRequest: (TopologyRuntimeWebBrowserRequest) -> Void
+
+        init(onSimulatedRequest: @escaping (TopologyRuntimeWebBrowserRequest) -> Void) {
+            self.onSimulatedRequest = onSimulatedRequest
+        }
 
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
             decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
         ) {
-            guard let scheme = navigationAction.request.url?.scheme?.lowercased() else {
+            guard navigationAction.targetFrame?.isMainFrame != false,
+                  let url = navigationAction.request.url
+            else {
+                decisionHandler(.cancel)
+                return
+            }
+            guard url.scheme?.lowercased() != "about" else {
                 decisionHandler(.allow)
                 return
             }
+            guard let address = simulatedAddress(for: url),
+                  let request = simulatedRequest(
+                    from: navigationAction.request,
+                    address: address
+                  )
+            else {
+                decisionHandler(.cancel)
+                return
+            }
+            onSimulatedRequest(request)
+            decisionHandler(.cancel)
+        }
 
-            // loadHTMLString uses about:blank. All other main-document navigation
-            // must go back through the simulated browser controls and network stack.
-            decisionHandler(scheme == "about" ? .allow : .cancel)
+        private func simulatedAddress(for url: URL) -> String? {
+            if url.scheme?.lowercased() == "http" {
+                return url.absoluteString
+            }
+            guard let base = URL(string: currentAddress),
+                  let resolved = URL(string: url.relativeString, relativeTo: base)?.absoluteURL,
+                  resolved.scheme?.lowercased() == "http"
+            else { return nil }
+            return resolved.absoluteString
+        }
+
+        private func simulatedRequest(
+            from request: URLRequest,
+            address: String
+        ) -> TopologyRuntimeWebBrowserRequest? {
+            let method = request.httpMethod?.uppercased() ?? "GET"
+            guard method == "GET" || method == "POST" else { return nil }
+            guard method == "POST" else {
+                return TopologyRuntimeWebBrowserRequest(address: address)
+            }
+            guard let body = request.httpBody,
+                  body.count <= TopologyRuntimeWebBrowserRequest.maximumBodySize
+            else { return nil }
+            return TopologyRuntimeWebBrowserRequest(
+                address: address,
+                method: method,
+                body: body
+            )
+        }
+    }
+}
+
+/// Email client workspace used by the runtime device sheet.
+///
+/// This local implementation keeps the existing account/compose/mailbox flows in
+/// the bounded sheet file while adding the message actions that are backed by the
+/// reducer. The pure reply and deletion rules remain in `TopologyEmailActions`.
+private struct TopologyRuntimeEmailReplyDeletionView: View {
+    private enum MailboxSection: String, CaseIterable, Identifiable {
+        case account
+        case compose
+        case inbox
+        case sent
+        case logs
+
+        var id: String { rawValue }
+        var localizationKey: String { "email.client.section.\(rawValue)" }
+    }
+
+    private struct PendingDeletion: Identifiable {
+        let folder: TopologyRuntimeEmailClientFolder
+        let messageID: UInt64
+        let subject: String
+
+        var id: String { "\(folder.rawValue)-\(messageID)" }
+    }
+
+    let configuration: TopologyRuntimeEmailClientConfiguration
+    let state: TopologyRuntimeEmailClientState
+    let onSaveConfiguration: (TopologyRuntimeEmailClientConfiguration) -> Void
+    let onSend: (TopologyRuntimeEmailMessage) -> Void
+    let onRetrieve: () -> Void
+    let onDeleteMessages: (TopologyRuntimeEmailClientFolder, [UInt64]) -> Void
+
+    @State private var selectedSection: MailboxSection = .account
+    @State private var name: String
+    @State private var email: String
+    @State private var username: String
+    @State private var password: String
+    @State private var smtpHost: String
+    @State private var smtpPort: String
+    @State private var pop3Host: String
+    @State private var pop3Port: String
+    @State private var composeTo = ""
+    @State private var composeCC = ""
+    @State private var composeBCC = ""
+    @State private var composeSubject = ""
+    @State private var composeBody = ""
+    @State private var pendingDeletion: PendingDeletion?
+    @State private var actionError: String?
+
+    init(
+        configuration: TopologyRuntimeEmailClientConfiguration,
+        state: TopologyRuntimeEmailClientState,
+        onSaveConfiguration: @escaping (TopologyRuntimeEmailClientConfiguration) -> Void,
+        onSend: @escaping (TopologyRuntimeEmailMessage) -> Void,
+        onRetrieve: @escaping () -> Void,
+        onDeleteMessages: @escaping (TopologyRuntimeEmailClientFolder, [UInt64]) -> Void
+    ) {
+        self.configuration = configuration
+        self.state = state
+        self.onSaveConfiguration = onSaveConfiguration
+        self.onSend = onSend
+        self.onRetrieve = onRetrieve
+        self.onDeleteMessages = onDeleteMessages
+        _name = State(initialValue: configuration.name)
+        _email = State(initialValue: configuration.email)
+        _username = State(initialValue: configuration.username)
+        _password = State(initialValue: configuration.password)
+        _smtpHost = State(initialValue: configuration.smtpHost)
+        _smtpPort = State(initialValue: String(configuration.smtpPort))
+        _pop3Host = State(initialValue: configuration.pop3Host)
+        _pop3Port = State(initialValue: String(configuration.pop3Port))
+    }
+
+    var body: some View {
+        Form {
+            statusSection
+            Section {
+                Picker(FiliusLocalization.t("email.client.section.label"), selection: $selectedSection) {
+                    ForEach(MailboxSection.allCases) { section in
+                        Text(FiliusLocalization.t(section.localizationKey)).tag(section)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(minHeight: 44)
+                .accessibilityIdentifier("email.client.section")
+            }
+            selectedContent
+        }
+        .accessibilityIdentifier("email.client.view")
+        .confirmationDialog(
+            FiliusLocalization.t("email.message.delete.confirm.title"),
+            isPresented: deletionConfirmationBinding,
+            titleVisibility: .visible
+        ) {
+            Button(FiliusLocalization.t("email.message.delete"), role: .destructive) {
+                guard let pendingDeletion else { return }
+                onDeleteMessages(pendingDeletion.folder, [pendingDeletion.messageID])
+                self.pendingDeletion = nil
+            }
+            Button(FiliusLocalization.t("ui.07af7cb30fca"), role: .cancel) {
+                pendingDeletion = nil
+            }
+        } message: {
+            Text(FiliusLocalization.t("email.message.delete.confirm.message"))
+        }
+        .alert(
+            FiliusLocalization.t("email.message.action.failed"),
+            isPresented: actionErrorBinding,
+            presenting: actionError
+        ) { _ in
+            Button(FiliusLocalization.t("ui.9ce3bd4224c8"), role: .cancel) {
+                actionError = nil
+            }
+        } message: { error in
+            Text(error)
+        }
+        .onChange(of: configuration) { _, newConfiguration in
+            name = newConfiguration.name
+            email = newConfiguration.email
+            username = newConfiguration.username
+            password = newConfiguration.password
+            smtpHost = newConfiguration.smtpHost
+            smtpPort = String(newConfiguration.smtpPort)
+            pop3Host = newConfiguration.pop3Host
+            pop3Port = String(newConfiguration.pop3Port)
+        }
+    }
+
+    private var deletionConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { pendingDeletion != nil },
+            set: { isPresented in
+                if !isPresented { pendingDeletion = nil }
+            }
+        )
+    }
+
+    private var actionErrorBinding: Binding<Bool> {
+        Binding(
+            get: { actionError != nil },
+            set: { isPresented in
+                if !isPresented { actionError = nil }
+            }
+        )
+    }
+
+    @ViewBuilder private var selectedContent: some View {
+        switch selectedSection {
+        case .account:
+            accountSection
+        case .compose:
+            composeSection
+        case .inbox:
+            messageSection(
+                titleKey: "email.client.inbox.title",
+                emptyKey: "email.client.inbox.empty",
+                folder: .inbox,
+                messages: configuration.inbox,
+                identifier: "email.client.inbox"
+            )
+        case .sent:
+            messageSection(
+                titleKey: "email.client.sent.title",
+                emptyKey: "email.client.sent.empty",
+                folder: .sent,
+                messages: configuration.sent,
+                identifier: "email.client.sent"
+            )
+        case .logs:
+            logsSection
+        }
+    }
+
+    private var emailStatusLocalizationKey: String {
+        if state.lastError != nil {
+            return "email.client.status.error"
+        }
+        if state.activeOperation == "retrieving" {
+            return "email.client.status.retrieving"
+        }
+        if state.isBusy {
+            return "email.client.status.sending"
+        }
+        return "email.client.status.idle"
+    }
+
+    private var statusSection: some View {
+        Section(FiliusLocalization.t("email.client.status.section")) {
+            LabeledContent(
+                FiliusLocalization.t("email.status.label"),
+                value: FiliusLocalization.t(emailStatusLocalizationKey)
+            )
+            if let lastError = state.lastError, !lastError.isEmpty {
+                Text(lastError)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("email.client.status.detail")
+            }
+            Button(action: onRetrieve) {
+                Label(
+                    FiliusLocalization.t("email.client.retrieve"),
+                    systemImage: "arrow.down.circle"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .frame(minHeight: 44)
+            .disabled(state.isBusy)
+            .accessibilityIdentifier("email.client.retrieve")
+        }
+    }
+
+    private var accountSection: some View {
+        Section(FiliusLocalization.t("email.client.account.title")) {
+            emailField("email.client.account.name", text: $name, identifier: "email.client.account.name")
+            emailField("email.client.account.address", text: $email, identifier: "email.client.account.address", keyboard: .emailAddress)
+            emailField("email.client.account.username", text: $username, identifier: "email.client.account.username")
+            VStack(alignment: .leading, spacing: 4) {
+                Text(FiliusLocalization.t("email.client.account.password"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                SecureField(FiliusLocalization.t("email.client.account.password"), text: $password)
+                    .textContentType(.password)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("email.client.account.password")
+            }
+            emailField("email.client.account.smtpHost", text: $smtpHost, identifier: "email.client.account.smtpHost")
+            emailField("email.client.account.smtpPort", text: $smtpPort, identifier: "email.client.account.smtpPort", keyboard: .numberPad)
+            emailField("email.client.account.pop3Host", text: $pop3Host, identifier: "email.client.account.pop3Host")
+            emailField("email.client.account.pop3Port", text: $pop3Port, identifier: "email.client.account.pop3Port", keyboard: .numberPad)
+            Button(action: saveConfiguration) {
+                Label(
+                    FiliusLocalization.t("email.client.account.save"),
+                    systemImage: "square.and.arrow.down"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .frame(minHeight: 44)
+            .accessibilityIdentifier("email.client.account.save")
+        }
+    }
+
+    private var composeSection: some View {
+        Section(FiliusLocalization.t("email.client.compose.title")) {
+            emailField("email.client.compose.to", text: $composeTo, identifier: "email.client.compose.to", keyboard: .emailAddress)
+            emailField("email.client.compose.cc", text: $composeCC, identifier: "email.client.compose.cc", keyboard: .emailAddress)
+            emailField("email.client.compose.bcc", text: $composeBCC, identifier: "email.client.compose.bcc", keyboard: .emailAddress)
+            emailField("email.client.compose.subject", text: $composeSubject, identifier: "email.client.compose.subject")
+            VStack(alignment: .leading, spacing: 4) {
+                Text(FiliusLocalization.t("email.client.compose.body"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $composeBody)
+                    .frame(minHeight: 160)
+                    .accessibilityLabel(FiliusLocalization.t("email.client.compose.body"))
+                    .accessibilityIdentifier("email.client.compose.body")
+            }
+            Button(action: sendComposedMessage) {
+                Label(
+                    FiliusLocalization.t("email.client.compose.send"),
+                    systemImage: "paperplane"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .frame(minHeight: 44)
+            .disabled(state.isBusy)
+            .accessibilityIdentifier("email.client.compose.send")
+        }
+    }
+
+    private func messageSection(
+        titleKey: String,
+        emptyKey: String,
+        folder: TopologyRuntimeEmailClientFolder,
+        messages: [TopologyRuntimeEmailMessage],
+        identifier: String
+    ) -> some View {
+        Section(FiliusLocalization.t(titleKey)) {
+            if messages.isEmpty {
+                Text(FiliusLocalization.t(emptyKey))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(messages, id: \.id) { message in
+                    DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 8) {
+                            messageAddressLine("email.message.from", addresses: [message.from])
+                            messageAddressLine("email.message.to", addresses: message.to)
+                            if !message.cc.isEmpty {
+                                messageAddressLine("email.message.cc", addresses: message.cc)
+                            }
+                            if !message.bcc.isEmpty {
+                                messageAddressLine("email.message.bcc", addresses: message.bcc)
+                            }
+                            Divider()
+                            Text(message.body.isEmpty ? FiliusLocalization.t("email.message.emptyBody") : message.body)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                            ViewThatFits(in: .horizontal) {
+                                HStack(spacing: 8) { messageActionButtons(message, folder: folder) }
+                                VStack(spacing: 8) { messageActionButtons(message, folder: folder) }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(message.subject.isEmpty ? FiliusLocalization.t("email.message.noSubject") : message.subject)
+                                .font(.headline)
+                            Text(message.from.javaString)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let receivedAtMilliseconds = message.receivedAtMilliseconds {
+                                Text(String(receivedAtMilliseconds))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("\(identifier).message.\(message.id)")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func messageActionButtons(
+        _ message: TopologyRuntimeEmailMessage,
+        folder: TopologyRuntimeEmailClientFolder
+    ) -> some View {
+        Button {
+            prepareReply(to: message, mode: .reply)
+        } label: {
+            Label(FiliusLocalization.t("email.message.reply"), systemImage: "arrowshape.turn.up.left")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .accessibilityIdentifier("email.message.\(message.id).reply")
+
+        Button {
+            prepareReply(to: message, mode: .replyAll)
+        } label: {
+            Label(FiliusLocalization.t("email.message.replyAll"), systemImage: "arrowshape.turn.up.left.2")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .accessibilityIdentifier("email.message.\(message.id).replyAll")
+
+        Button(role: .destructive) {
+            pendingDeletion = PendingDeletion(
+                folder: folder,
+                messageID: message.id,
+                subject: message.subject
+            )
+        } label: {
+            Label(FiliusLocalization.t("email.message.delete"), systemImage: "trash")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .accessibilityIdentifier("email.message.\(message.id).delete")
+    }
+
+    private var logsSection: some View {
+        Section(FiliusLocalization.t("email.logs.title")) {
+            let entries = Array(state.logs.suffix(50))
+            if entries.isEmpty {
+                Text(FiliusLocalization.t("email.logs.empty"))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(entries, id: \.id) { entry in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(String(entry.timestampMilliseconds))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(FiliusLocalization.t(
+                            "email.logs.entry",
+                            entry.protocolName,
+                            entry.direction,
+                            entry.message
+                        ))
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                    }
+                    .accessibilityIdentifier("email.client.log.\(entry.id)")
+                }
+            }
+        }
+    }
+
+    private func saveConfiguration() {
+        var updated = configuration
+        updated.name = name
+        updated.email = email
+        updated.username = username
+        updated.password = password
+        updated.smtpHost = smtpHost
+        updated.smtpPort = Int(smtpPort) ?? 0
+        updated.pop3Host = pop3Host
+        updated.pop3Port = Int(pop3Port) ?? 0
+        onSaveConfiguration(updated)
+    }
+
+    private func sendComposedMessage() {
+        let message = TopologyRuntimeEmailMessage(
+            from: configuration.address,
+            to: parsedEmailAddresses(composeTo),
+            cc: parsedEmailAddresses(composeCC),
+            bcc: parsedEmailAddresses(composeBCC),
+            subject: composeSubject,
+            body: composeBody
+        )
+        onSend(message)
+    }
+
+    private func prepareReply(
+        to message: TopologyRuntimeEmailMessage,
+        mode: TopologyRuntimeEmailReplyMode
+    ) {
+        do {
+            let draft = try TopologyEmailActions.replyDraft(
+                to: message,
+                from: configuration.address,
+                mode: mode
+            )
+            composeTo = draft.to.map(\.javaString).joined(separator: ", ")
+            composeCC = draft.cc.map(\.javaString).joined(separator: ", ")
+            composeBCC = ""
+            composeSubject = draft.subject
+            composeBody = draft.body
+            selectedSection = .compose
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    private func parsedEmailAddresses(_ rawValue: String) -> [TopologyRuntimeEmailAddress] {
+        rawValue
+            .split(whereSeparator: { $0 == "," || $0 == ";" || $0 == "\n" })
+            .compactMap { token in
+                let value = String(token).trimmingCharacters(in: .whitespacesAndNewlines)
+                return TopologyRuntimeEmailAddress(javaString: value)
+            }
+    }
+
+    private func messageAddressLine(
+        _ key: String,
+        addresses: [TopologyRuntimeEmailAddress]
+    ) -> some View {
+        LabeledContent(
+            FiliusLocalization.t(key),
+            value: addresses.map(\.javaString).joined(separator: ", ")
+        )
+        .font(.caption)
+    }
+
+    private func emailField(
+        _ key: String,
+        text: Binding<String>,
+        identifier: String,
+        keyboard: UIKeyboardType = .default
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(FiliusLocalization.t(key))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField(FiliusLocalization.t(key), text: text)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(keyboard)
+                .textFieldStyle(.roundedBorder)
+                .frame(minHeight: 44)
+                .accessibilityIdentifier(identifier)
         }
     }
 }

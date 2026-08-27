@@ -18,7 +18,7 @@ It is suitable as a private production staging repository. It is **not ready for
 
 1. **Separate license not executed.** The app contains Filius-derived behavior, fixtures, text, and visual assets. A maintainer’s willingness must be converted into a signed license from parties with documented authority over the covered material.
 2. **Upstream assets are copied verbatim.** Files under `ios/FiliusPad/TopologyEditor/Assets/JavaParity/` were hash-matched against the upstream Filius resources. The final agreement must cover those assets explicitly.
-3. **In-app license statement is provisional.** The Information screen currently states “GNU GPLv2 or GNU GPLv3” and refers to upstream evidence files. It must be changed to the signed separate license before release if the project is not distributed under GPL.
+3. **The Apple-platform permission is now executed.** The app presents GPLv2/GPLv3 together with the clean public copy of the executed Apple-platform additional permission. The signed scan and paper original remain private evidence; third-party notices and all Apple release gates still require separate review.
 4. **Name and marks require permission.** Permission to use “Filius,” the associated logos, icons, and project identity must be recorded separately or included expressly in the signed agreement.
 5. **Repository must remain private.** `LICENSE-STATUS.md` is the authoritative release gate until a final license and public-distribution policy are added.
 
@@ -111,7 +111,7 @@ The repository-mode checks establish a private production baseline; they do not 
 
 Keep both repositories private while the license is unresolved. The production repository may be made public only after:
 
-1. the separate license and trademark permission are signed;
+1. the executed Apple-platform additional permission is retained and its public clean copy is shipped;
 2. the final repository license and contribution policy are added;
 3. the in-app license text matches the signed agreement;
 4. a secret and history review passes; and

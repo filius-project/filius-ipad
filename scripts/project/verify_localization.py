@@ -97,7 +97,7 @@ def main() -> int:
             errors.append(f'missing {contract} contract')
     plural_bases = set(PLURAL_CALL.findall(source))
     plural_keys = {suffix for base in plural_bases for suffix in (f'{base}.one', f'{base}.other')}
-    used = (set(CALL.findall(source)) | plural_keys) - {r'error.validation.\(rawValue)'}
+    used = {key for key in (set(CALL.findall(source)) | plural_keys) if r'\(' not in key}
     if 'runtime.files' not in plural_bases:
         errors.append('production plural contract is unused')
     for key in sorted(used - keys):

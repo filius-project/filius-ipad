@@ -40,8 +40,43 @@ final class TopologyRuntimeServiceAppParityUITests: XCTestCase {
         add(hierarchy)
     }
 
+    func testDNSRecursiveForwarderSavePersistsToggleThenEditedAddress() {
+        seedSinglePCRuntimeSheet(
+            ip: "10.12.0.53",
+            subnet: "255.255.255.0",
+            dnsServer: "10.12.0.53"
+        )
+        installProgramIfNeeded(.dnsServer)
+        launchProgram(.dnsServer)
+
+        let shellIdentifier = "runtime.device.appShell.dnsServer"
+        _ = requireElement(app.otherElements[shellIdentifier], named: shellIdentifier)
+
+        // Reproduce the review defect exactly: toggle first, edit the forwarder second, then save.
+        setSwitch("runtime.device.app.dns.recursive", isOn: true)
+        setTextField("runtime.device.app.dns.forwarder", to: "10.12.0.54")
+        tapButton("runtime.device.app.dns.recursion.save")
+        waitForDiagnosticContains(
+            "debug.lastRuntimeEvent",
+            expectedSubstring: "recursive=true,forwarder=10.12.0.54",
+            timeout: 4
+        )
+        assertDiagnosticContains("debug.lastRuntimeFault", expectedSubstring: "none")
+
+        closeRuntimeProgram(shellIdentifier)
+        assertDiagnosticContains("debug.openedRuntimeProgram", expectedSubstring: "none")
+        launchProgram(.dnsServer)
+        _ = requireElement(app.otherElements[shellIdentifier], named: shellIdentifier)
+        assertTextFieldValue("runtime.device.app.dns.forwarder", equals: "10.12.0.54")
+        assertSwitch("runtime.device.app.dns.recursive", isOn: true)
+    }
+
     func testDNSServiceInstallLaunchUseAndClosePublishesDeterministicDiagnostics() {
-        seedSinglePCRuntimeSheet(ip: "10.12.0.53", subnet: "255.255.255.0")
+        seedSinglePCRuntimeSheet(
+            ip: "10.12.0.53",
+            subnet: "255.255.255.0",
+            dnsServer: "10.12.0.53"
+        )
         installProgramIfNeeded(.dnsServer)
         launchProgram(.dnsServer)
 
@@ -53,20 +88,15 @@ final class TopologyRuntimeServiceAppParityUITests: XCTestCase {
         assertDiagnosticContains("debug.lastRuntimeFault", expectedSubstring: "none")
 
         setTextField("runtime.device.app.dns.hostname", to: "service.lab")
-        setTextField("runtime.device.app.dns.targetIP", to: "10.12.0.44")
+        setTextField("runtime.device.app.dns.target", to: "10.12.0.44")
         tapButton("runtime.device.app.dns.add")
         waitForDiagnosticContains("debug.lastRuntimeEvent", expectedSubstring: "dnsRecordRegistered", timeout: 4)
         assertDiagnosticContains("debug.lastRuntimeFault", expectedSubstring: "none")
 
         setTextField("runtime.device.app.dns.lookupHost", to: "service.lab")
         tapButton("runtime.device.app.dns.resolve")
-        waitForDiagnosticContains("debug.lastRuntimeFault", expectedSubstring: "dnsServerMissing", timeout: 4)
-        assertDiagnosticContains("debug.lastRuntimeEvent", expectedSubstring: "dnsResolveRejectedMissingServerConfiguration")
-
-        setTextField("runtime.device.app.dns.hostname", to: "missing.lab")
-        tapButton("runtime.device.app.dns.remove")
-        waitForDiagnosticContains("debug.lastRuntimeEvent", expectedSubstring: "dnsRecordRejectedUnknownHost", timeout: 4)
-        assertDiagnosticContains("debug.lastRuntimeFault", expectedSubstring: "dnsUnknownHost")
+        waitForDiagnosticContains("debug.lastRuntimeEvent", expectedSubstring: "dnsResolveSucceeded", timeout: 4)
+        assertDiagnosticContains("debug.lastRuntimeFault", expectedSubstring: "none")
 
         tapButton("runtime.device.app.dns.lifecycle")
         waitForDiagnosticContains("debug.lastRuntimeEvent", expectedSubstring: "dnsServerStopped", timeout: 4)
@@ -185,11 +215,12 @@ final class TopologyRuntimeServiceAppParityUITests: XCTestCase {
 
     private func seedSinglePCRuntimeSheet(
         ip: String = "192.168.0.10",
-        subnet: String = "255.255.255.0"
+        subnet: String = "255.255.255.0",
+        dnsServer: String? = nil
     ) {
         tapButton("palette.tool.place.pc")
         tapCanvas(at: CGVector(dx: 0.40, dy: 0.35))
-        configureSelectedDesignDevice(ip: ip, subnet: subnet)
+        configureSelectedDesignDevice(ip: ip, subnet: subnet, dnsServer: dnsServer)
 
         tapButton("runtime.control.start")
         waitForDiagnosticContains("debug.simulationPhase", expectedSubstring: "running", timeout: 4)
@@ -198,10 +229,17 @@ final class TopologyRuntimeServiceAppParityUITests: XCTestCase {
         requireRuntimeDeviceSheetOpen()
     }
 
-    private func configureSelectedDesignDevice(ip: String, subnet: String) {
+    private func configureSelectedDesignDevice(
+        ip: String,
+        subnet: String,
+        dnsServer: String? = nil
+    ) {
         tapButton("design.configuration.open")
         setTextField("design.configuration.ip", to: ip)
         setTextField("design.configuration.mask", to: subnet)
+        if let dnsServer {
+            setTextField("design.configuration.dns", to: dnsServer)
+        }
         tapButton("design.configuration.save")
         tapButton("design.configuration.close")
     }
@@ -295,10 +333,10 @@ final class TopologyRuntimeServiceAppParityUITests: XCTestCase {
 
     private func revealRuntimeSheetElementIfPresent(_ element: XCUIElement, towardTop: Bool) -> Bool {
         guard element.exists else { return false }
-        for _ in 0..<8 where !element.isHittable {
+        for _ in 0..<8 where !runtimeSheetElementIsReady(element, requiresSafeViewport: true) {
             scrollRuntimeSheet(toward: element, fallbackTowardTop: towardTop)
         }
-        return element.exists
+        return runtimeSheetElementIsReady(element, requiresSafeViewport: true)
     }
 
     @discardableResult
@@ -331,20 +369,30 @@ final class TopologyRuntimeServiceAppParityUITests: XCTestCase {
         guard element.exists, element.isHittable else { return false }
         guard requiresSafeViewport else { return true }
 
-        let viewport = runtimeSheetViewport(for: runtimeSheetGestureSurface())
+        let surface = runtimeSheetGestureSurface()
+        guard surface.exists, surface.frame.width > 0, surface.frame.height > 0 else { return false }
+        let viewport = runtimeSheetViewport(for: surface)
         let frame = element.frame
-        return frame.height > 0
-            && frame.minY >= viewport.minY
-            && frame.maxY <= viewport.maxY
+        return frame.width > 0
+            && frame.height > 0
+            && viewport.width > 0
+            && viewport.height > 0
+            && viewport.contains(CGPoint(x: frame.minX, y: frame.minY))
+            && viewport.contains(CGPoint(x: frame.maxX, y: frame.maxY))
     }
 
     private func runtimeSheetViewport(for surface: XCUIElement) -> CGRect {
         let frame = surface.frame
+        guard frame.width > 16, frame.height > 32 else { return .zero }
+        let topInset = min(72, max(16, frame.height * 0.12))
+        let bottomInset = min(48, max(12, frame.height * 0.08))
+        let width = max(0, frame.width - 16)
+        let height = max(0, frame.height - topInset - bottomInset)
         return CGRect(
             x: frame.minX + 8,
-            y: frame.minY + 72,
-            width: max(0, frame.width - 16),
-            height: max(0, frame.height - 96)
+            y: frame.minY + topInset,
+            width: width,
+            height: height
         )
     }
 
@@ -362,9 +410,10 @@ final class TopologyRuntimeServiceAppParityUITests: XCTestCase {
 
     private func scrollRuntimeSheet(toward element: XCUIElement, fallbackTowardTop: Bool) {
         let surface = runtimeSheetGestureSurface()
+        guard surface.exists, surface.isHittable, surface.frame.width > 0, surface.frame.height > 0 else { return }
         let viewport = runtimeSheetViewport(for: surface)
 
-        if element.exists {
+        if element.exists, viewport != .zero {
             if element.frame.minY < viewport.minY {
                 dragRuntimeSheet(surface, upward: false)
                 return
@@ -379,6 +428,7 @@ final class TopologyRuntimeServiceAppParityUITests: XCTestCase {
     }
 
     private func dragRuntimeSheet(_ surface: XCUIElement, upward: Bool) {
+        guard surface.exists, surface.isHittable, surface.frame.width > 0, surface.frame.height > 0 else { return }
         let start = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upward ? 0.68 : 0.32))
         let end = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upward ? 0.38 : 0.62))
         start.press(forDuration: 0.05, thenDragTo: end)
@@ -547,6 +597,63 @@ final class TopologyRuntimeServiceAppParityUITests: XCTestCase {
         }
     }
 
+    private func assertTextFieldValue(
+        _ identifier: String,
+        equals expectedValue: String,
+        timeout: TimeInterval = 5
+    ) {
+        let field = revealRuntimeSheetElement(
+            app.textFields.matching(identifier: identifier).firstMatch,
+            named: identifier,
+            towardTop: false,
+            maximumSwipes: max(1, Int(timeout.rounded(.up)) * 2)
+        )
+        XCTAssertEqual(field.value as? String, expectedValue, "Unexpected value for '\(identifier)'")
+    }
+
+    private func assertSwitch(_ identifier: String, isOn expectedValue: Bool) {
+        let toggle = revealRuntimeSheetElement(
+            app.switches.matching(identifier: identifier).firstMatch,
+            named: identifier,
+            towardTop: true
+        )
+        XCTAssertEqual(
+            switchIsOn(toggle),
+            expectedValue,
+            "Unexpected switch value '\(String(describing: toggle.value))' for '\(identifier)'"
+        )
+    }
+
+    private func setSwitch(_ identifier: String, isOn expectedValue: Bool) {
+        let toggle = requireElement(app.switches[identifier], named: identifier)
+        XCTAssertTrue(toggle.isEnabled, "Switch '\(identifier)' must be enabled before tapping")
+        if switchIsOn(toggle) == expectedValue { return }
+
+        // SwiftUI exposes both the complete labeled row and its trailing UIKit switch. Prefer the
+        // nested control because tapping the labeled row can land on the text without toggling.
+        let nestedToggle = toggle.descendants(matching: .switch).firstMatch
+        if nestedToggle.exists, nestedToggle.isHittable {
+            nestedToggle.tap()
+        } else {
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.5)).tap()
+        }
+        let predicate = NSPredicate { [weak self] _, _ in
+            self?.switchIsOn(toggle) == expectedValue
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: toggle)
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [expectation], timeout: 3),
+            .completed,
+            "Switch '\(identifier)' did not reach expected value '\(expectedValue)'"
+        )
+    }
+
+    private func switchIsOn(_ toggle: XCUIElement) -> Bool {
+        let normalizedValue = ((toggle.value as? String) ?? String(describing: toggle.value)).lowercased()
+        let enabledValues: Set<String> = ["1", "on", "true", "yes", "ein", "oui", "activé"]
+        return enabledValues.contains(normalizedValue)
+    }
+
     private func tapSwitch(_ identifier: String) {
         let toggle = requireElement(app.switches[identifier], named: identifier)
         XCTAssertTrue(toggle.isEnabled, "Switch '\(identifier)' must be enabled before tapping")
@@ -633,18 +740,25 @@ final class TopologyRuntimeServiceAppParityUITests: XCTestCase {
         // Dynamic SwiftUI sheet content can occasionally consume the first synthesized tap while
         // the app shell is settling after a dialog closes. Retry the idempotent close action, and
         // only continue once the shell has actually been removed from the accessibility tree.
-        for _ in 0..<3 {
-            if !shell.exists {
-                return
-            }
+        for _ in 0..<4 {
+            if !shell.exists { return }
 
             let closeButton = app.buttons["runtime.device.app.close"]
-            if closeButton.exists {
-                tapRuntimeSheetButton("runtime.device.app.close", towardTop: true)
+            guard closeButton.exists else {
+                _ = waitForElementToDisappear(shell, timeout: 1)
+                continue
             }
-            if waitForElementToDisappear(shell, timeout: 2) {
-                return
+            if !closeButton.isHittable {
+                _ = revealRuntimeSheetElement(
+                    closeButton,
+                    named: "runtime.device.app.close",
+                    towardTop: true,
+                    maximumSwipes: 4
+                )
             }
+            XCTAssertTrue(closeButton.isHittable, "Runtime app close button must be hittable")
+            closeButton.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            if waitForElementToDisappear(shell, timeout: 4) { return }
         }
 
         XCTFail("Timed out waiting for '\(shellIdentifier)' to disappear after closing the runtime app")

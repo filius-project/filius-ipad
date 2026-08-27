@@ -14,7 +14,7 @@ enum TopologyEthernetPayload: Equatable {
     case ipv4(TopologyIPv4Packet)
 }
 
-enum TopologyARPOperation: String, Equatable {
+enum TopologyARPOperation: String, Codable, Equatable, Sendable {
     case request
     case reply
 }
@@ -27,7 +27,7 @@ struct TopologyARPPacket: Equatable {
     let targetIPAddress: String
 }
 
-enum TopologyIPv4Protocol: Int, Equatable {
+enum TopologyIPv4Protocol: Int, Codable, Equatable, Sendable {
     case icmp = 1
     case tcp = 6
     case udp = 17
@@ -59,7 +59,7 @@ indirect enum TopologyIPv4Payload: Equatable {
     case udp(TopologyUDPDatagram)
 }
 
-enum TopologyICMPMessageKind: String, Equatable {
+enum TopologyICMPMessageKind: String, Codable, Equatable, Sendable {
     case echoRequest
     case echoReply
     case destinationNetworkUnreachable
@@ -233,6 +233,26 @@ struct TopologyPacketTraceEvent: Equatable, Identifiable {
     let detail: String?
 }
 
+struct TopologyPacketTraceRetentionPolicy: Equatable {
+    static let production = TopologyPacketTraceRetentionPolicy(
+        maximumEventCount: 10_000,
+        evictionBatchSize: 1_000
+    )
+
+    let maximumEventCount: Int
+    let evictionBatchSize: Int
+
+    init(maximumEventCount: Int, evictionBatchSize: Int) {
+        precondition(maximumEventCount > 0, "Packet-trace retention must keep at least one event")
+        precondition(evictionBatchSize > 0, "Packet-trace eviction must remove at least one event")
+        precondition(
+            evictionBatchSize <= maximumEventCount,
+            "Packet-trace eviction cannot exceed the retention limit"
+        )
+        self.maximumEventCount = maximumEventCount
+        self.evictionBatchSize = evictionBatchSize
+    }
+}
 
 enum TopologyPacketCaptureIdentity: Equatable, Hashable {
     case packet(UInt64)
@@ -295,6 +315,13 @@ struct TopologyPacketLayerPath: Equatable {
 struct TopologyNetworkRuntimePortSnapshot: Equatable {
     let id: UUID
     let label: String
+    let macAddress: String?
+
+    init(id: UUID, label: String, macAddress: String? = nil) {
+        self.id = id
+        self.label = label
+        self.macAddress = TopologyPortMetadata.canonicalMACAddress(macAddress)
+    }
 }
 
 struct TopologyNetworkRuntimeNodeSnapshot: Equatable {
@@ -378,7 +405,13 @@ struct TopologyNetworkRuntimeTopologySnapshot: Equatable {
                 TopologyNetworkRuntimeNodeSnapshot(
                     id: node.id,
                     kind: node.kind,
-                    ports: node.ports.map { TopologyNetworkRuntimePortSnapshot(id: $0.id, label: $0.label) }
+                    ports: node.ports.map {
+                        TopologyNetworkRuntimePortSnapshot(
+                            id: $0.id,
+                            label: $0.label,
+                            macAddress: $0.importedMACAddress
+                        )
+                    }
                 )
             },
             links: (editorState.graph.links + editorState.wirelessAssociations().map(\.runtimeLink)).map { link in
@@ -500,6 +533,37 @@ struct TopologyRuntimeDHCPLeaseRecord: Equatable {
     let expiresAtMilliseconds: UInt64?
 }
 
+enum TopologyRuntimeDHCPExistingLeasePolicy: String, Equatable {
+    /// A live server reconfiguration never revokes an address already accepted by a client.
+    /// The reservation remains until expiry or until that client accepts a replacement lease.
+    case preserveUntilExpiryOrClientRebind
+}
+
+struct TopologyRuntimeDHCPServerReconfiguration: Equatable {
+    let listenerSocketID: UUID?
+    let existingLeasePolicy: TopologyRuntimeDHCPExistingLeasePolicy
+}
+
+enum TopologyRuntimeDHCPServerReconfigurationError: Error, Equatable {
+    case runtimeStopped
+    case unsupportedNode
+    case interfaceUnavailable
+    case listenerBindFailed
+
+    var localizedDescription: String {
+        switch self {
+        case .runtimeStopped:
+            return "The DHCP service can be reconfigured only while the simulation is running."
+        case .unsupportedNode:
+            return "The runtime node does not support a DHCP server."
+        case .interfaceUnavailable:
+            return "The DHCP server interface is unavailable."
+        case .listenerBindFailed:
+            return "UDP port 67 is already in use on the DHCP server node."
+        }
+    }
+}
+
 enum TopologyRuntimeDHCPMessageType: String, Equatable, Hashable {
     case discover = "DHCPDISCOVER"
     case request = "DHCPREQUEST"
@@ -582,7 +646,66 @@ enum TopologyRemoteLinkRuntimeCondition: Equatable {
     case unpaired
     case ambiguous(enabledNodeCount: Int)
     case detached(partnerNodeID: UUID)
+    case detachedLAN
+    case waitingForPeer
+    case connecting
+    case connectionFailed(message: String)
     case active(partnerNodeID: UUID)
+    case activeLAN(peerName: String)
+}
+
+enum TopologyRemoteLinkLANConnectionState: Equatable, Sendable {
+    case inactive
+    case listening
+    case browsing
+    case connecting
+    case reconnecting
+    case connected(peerName: String)
+    case failed(message: String)
+}
+
+enum TopologyRemoteLinkLANOutboundFrameState: Equatable, Sendable {
+    case pending
+    case awaitingControllerAcknowledgement
+}
+
+enum TopologyRemoteLinkLANSendFailure: Equatable, Sendable {
+    case sessionUnavailable
+    case controllerQueueFull(limit: Int)
+    case sessionStopped
+    case encodingFailed(message: String)
+    case transportFailed(message: String, attempts: Int)
+
+    var summary: String {
+        switch self {
+        case .sessionUnavailable:
+            return "LAN remote-link session unavailable"
+        case let .controllerQueueFull(limit):
+            return "LAN remote-link controller queue full (limit=\(limit))"
+        case .sessionStopped:
+            return "LAN remote-link session stopped before delivery"
+        case let .encodingFailed(message):
+            return "LAN remote-link encoding failed: \(message)"
+        case let .transportFailed(message, attempts):
+            return "LAN remote-link send failed after \(attempts) attempt(s): \(message)"
+        }
+    }
+}
+
+enum TopologyRemoteLinkLANSendResult: Equatable, Sendable {
+    case accepted(attempts: Int)
+    case failed(TopologyRemoteLinkLANSendFailure)
+}
+
+struct TopologyRemoteLinkLANOutboundFrame: Equatable, Sendable {
+    let transmissionID: UInt64
+    let nodeID: UUID
+    let frameIdentity: UInt64
+    let packetIdentity: UInt64?
+    let interfaceID: UUID?
+    let pairIdentifier: String
+    let frame: TopologyRemoteLinkWireFrame
+    var state: TopologyRemoteLinkLANOutboundFrameState
 }
 
 struct TopologyRemoteLinkRuntimeStatus: Equatable, Identifiable {
@@ -607,6 +730,8 @@ enum TopologyRemoteLinkRuntimeDropReason: String, Equatable {
     case latencyOverflow
     case pairNoLongerActive
     case partnerLocalPortUnavailable
+    case lanOutboundQueueOverflow
+    case lanDeliveryFailed
 }
 
 enum TopologyRemoteLinkRuntimeEvidenceKind: Equatable {
@@ -673,6 +798,12 @@ enum TopologyNetworkRuntimeScheduledEventKind: Equatable {
         sourceNodeID: UUID,
         partnerNodeID: UUID,
         partnerPortID: UUID,
+        pairIdentifier: String,
+        latencyMilliseconds: UInt64,
+        frame: TopologyEthernetFrame
+    )
+    case lanRemoteLinkTransmission(
+        nodeID: UUID,
         pairIdentifier: String,
         latencyMilliseconds: UInt64,
         frame: TopologyEthernetFrame
@@ -757,16 +888,21 @@ struct TopologyNetworkRuntimeState: Equatable {
     var phase: TopologyNetworkRuntimePhase = .stopped
     var currentTimeMilliseconds: UInt64 = 0
     var simulationSpeedPercent = TopologyNetworkRuntimeSpeed.defaultPercent
+    var globalPacketLossEnabled = false
     var seed: UInt64
     var topologySnapshot: TopologyNetworkRuntimeTopologySnapshot = .empty
     var pendingEvents: [TopologyNetworkRuntimeScheduledEvent] = []
     var packetTraces: [TopologyPacketTraceEvent] = []
+    var discardedPacketTraceCount: UInt64 = 0
     var arpCachesByNodeID: [UUID: [String: TopologyRuntimeARPCacheEntry]] = [:]
     var switchForwardingTablesByNodeID: [UUID: [String: UUID]] = [:]
     var switchForwardingUpdatedAtMillisecondsByNodeID: [UUID: [String: UInt64]] = [:]
     var switchSeenFrameIdentitiesByNodeID: [UUID: Set<UInt64>] = [:]
     var remoteLinkSeenFrameIdentitiesByNodeID: [UUID: Set<UInt64>] = [:]
     var remoteLinkEvidence: [TopologyRemoteLinkRuntimeEvidence] = []
+    var lanRemoteLinkConnectionStateByNodeID: [UUID: TopologyRemoteLinkLANConnectionState] = [:]
+    var lanRemoteLinkOutboundFrames: [TopologyRemoteLinkLANOutboundFrame] = []
+    var nextLANRemoteLinkTransmissionIdentity: UInt64
     var deliveredIPv4PacketsByNodeID: [UUID: [TopologyRuntimeDeliveredIPv4Packet]] = [:]
     var icmpObservationsByNodeID: [UUID: [TopologyRuntimeICMPObservation]] = [:]
     var socketsByID: [UUID: TopologyRuntimeSocketRecord] = [:]
@@ -793,8 +929,9 @@ struct TopologyNetworkRuntimeState: Equatable {
     var nextTCPInitialSequenceValue: UInt64 = 1
     var nextDNSQuerySequenceNumber: UInt64 = 1
 
-    init(seed: UInt64) {
+    init(seed: UInt64, nextLANRemoteLinkTransmissionIdentity: UInt64 = 0) {
         self.seed = seed
+        self.nextLANRemoteLinkTransmissionIdentity = nextLANRemoteLinkTransmissionIdentity
     }
 }
 
@@ -859,21 +996,28 @@ private struct TopologyPendingIPv4Transmission: Equatable {
 
 struct TopologyNetworkRuntimeEngine: Equatable {
     static let defaultSeed: UInt64 = 0xF11A5
+    static let maximumLANRemoteLinkOutboundFramesPerNode = 64
+    static let maximumPendingLANRemoteLinkTransmissionsPerNode = 64
 
     private(set) var state: TopologyNetworkRuntimeState
     private var random: TopologyJavaCompatibleRandom
     private var udpPortRandom: TopologyJavaCompatibleRandom
     private var tcpPortRandom: TopologyJavaCompatibleRandom
     private var runtimeSpeed: TopologyNetworkRuntimeSpeed
+    private let packetTraceRetentionPolicy: TopologyPacketTraceRetentionPolicy
     private var isProcessingScheduledEvents = false
     private var pendingIPv4TransmissionsByARPKey: [TopologyPendingARPKey: [TopologyPendingIPv4Transmission]] = [:]
 
-    init(seed: UInt64 = TopologyNetworkRuntimeEngine.defaultSeed) {
+    init(
+        seed: UInt64 = TopologyNetworkRuntimeEngine.defaultSeed,
+        packetTraceRetentionPolicy: TopologyPacketTraceRetentionPolicy = .production
+    ) {
         state = TopologyNetworkRuntimeState(seed: seed)
         random = TopologyJavaCompatibleRandom(seed: seed)
         udpPortRandom = TopologyJavaCompatibleRandom(seed: seed ^ 0x5544_5050)
         tcpPortRandom = TopologyJavaCompatibleRandom(seed: seed ^ 0x5443_5050)
         runtimeSpeed = TopologyNetworkRuntimeSpeed()
+        self.packetTraceRetentionPolicy = packetTraceRetentionPolicy
         state.simulationSpeedPercent = runtimeSpeed.percent
     }
 
@@ -886,6 +1030,10 @@ struct TopologyNetworkRuntimeEngine: Equatable {
         state.simulationSpeedPercent = runtimeSpeed.percent
     }
 
+    mutating func setGlobalPacketLossEnabled(_ enabled: Bool) {
+        state.globalPacketLossEnabled = state.phase == .running && enabled
+    }
+
     @discardableResult
     mutating func handle(_ input: TopologyNetworkRuntimeInput) -> [TopologyNetworkRuntimeOutput] {
         switch input {
@@ -894,7 +1042,11 @@ struct TopologyNetworkRuntimeEngine: Equatable {
                 return [output(.startIgnoredAlreadyRunning)]
             }
 
-            state = TopologyNetworkRuntimeState(seed: seed)
+            let nextLANTransmissionIdentity = state.nextLANRemoteLinkTransmissionIdentity
+            state = TopologyNetworkRuntimeState(
+                seed: seed,
+                nextLANRemoteLinkTransmissionIdentity: nextLANTransmissionIdentity
+            )
             state.phase = .running
             state.currentTimeMilliseconds = initialTimeMilliseconds
             state.simulationSpeedPercent = runtimeSpeed.percent
@@ -915,6 +1067,7 @@ struct TopologyNetworkRuntimeEngine: Equatable {
             }
 
             state.phase = .stopped
+            state.globalPacketLossEnabled = false
             isProcessingScheduledEvents = false
             pendingIPv4TransmissionsByARPKey.removeAll()
             state.pendingEvents.removeAll()
@@ -923,6 +1076,8 @@ struct TopologyNetworkRuntimeEngine: Equatable {
             state.switchForwardingUpdatedAtMillisecondsByNodeID.removeAll()
             state.switchSeenFrameIdentitiesByNodeID.removeAll()
             state.remoteLinkSeenFrameIdentitiesByNodeID.removeAll()
+            state.lanRemoteLinkConnectionStateByNodeID.removeAll()
+            state.lanRemoteLinkOutboundFrames.removeAll()
             state.deliveredIPv4PacketsByNodeID.removeAll()
             state.icmpObservationsByNodeID.removeAll()
             state.socketsByID.removeAll()
@@ -1006,6 +1161,14 @@ struct TopologyNetworkRuntimeEngine: Equatable {
             detail: detail
         )
         state.nextTraceIdentity &+= 1
+        if state.packetTraces.count >= packetTraceRetentionPolicy.maximumEventCount {
+            let evictionCount = min(
+                packetTraceRetentionPolicy.evictionBatchSize,
+                state.packetTraces.count
+            )
+            state.packetTraces.removeFirst(evictionCount)
+            state.discardedPacketTraceCount &+= UInt64(evictionCount)
+        }
         state.packetTraces.append(trace)
     }
 
@@ -1156,19 +1319,13 @@ extension TopologyNetworkRuntimeEngine {
                 ipAddress: configuration.ipAddress,
                 subnetMask: configuration.subnetMask,
                 defaultGateway: deviceConfiguration?.defaultGateway ?? "",
-                macAddress: Self.stableMACAddress(for: port.id)
+                macAddress: port.macAddress ?? Self.stableMACAddress(for: port.id)
             )
         }
     }
 
     static func stableMACAddress(for portID: UUID) -> String {
-        let compact = portID.uuidString.replacingOccurrences(of: "-", with: "")
-        let suffix = Array(compact.suffix(10))
-        var octets = ["02"]
-        for offset in stride(from: 0, to: suffix.count, by: 2) {
-            octets.append(String(suffix[offset...min(offset + 1, suffix.count - 1)]).uppercased())
-        }
-        return octets.joined(separator: ":")
+        TopologyPortMetadata.stableGeneratedMACAddress(for: portID)
     }
 
     mutating func clearARPCache(nodeID: UUID? = nil) {
@@ -1270,7 +1427,7 @@ extension TopologyNetworkRuntimeEngine {
         while !condition(self), processedEventCount < maximumEvents {
             let nextDeadline = state.pendingEvents.compactMap { event -> UInt64? in
                 switch event.kind {
-                case .ethernetLinkDelivery, .remoteLinkDelivery:
+                case .ethernetLinkDelivery, .remoteLinkDelivery, .lanRemoteLinkTransmission:
                     return event.deadlineMilliseconds
                 default:
                     return nil
@@ -1502,12 +1659,20 @@ extension TopologyNetworkRuntimeEngine {
         let pairIdentifier = configuration.flatMap { normalizedRemoteLinkPairIdentifier($0.pairIdentifier) }
         let localPortID = node.ports.first?.id
         let isLocalPortAttached = localPortID.flatMap { attachedEndpoint(nodeID: nodeID, portID: $0) } != nil
-        let pendingFrameCount = state.pendingEvents.reduce(into: 0) { count, event in
-            guard case let .remoteLinkDelivery(sourceNodeID, _, _, _, _, _) = event.kind,
-                  sourceNodeID == nodeID
-            else { return }
-            count += 1
+        let scheduledFrameCount = state.pendingEvents.reduce(into: 0) { count, event in
+            switch event.kind {
+            case let .remoteLinkDelivery(sourceNodeID, _, _, _, _, _) where sourceNodeID == nodeID:
+                count += 1
+            case let .lanRemoteLinkTransmission(eventNodeID, _, _, _) where eventNodeID == nodeID:
+                count += 1
+            default:
+                break
+            }
         }
+        let controllerFrameCount = state.lanRemoteLinkOutboundFrames.reduce(into: 0) { count, outbound in
+            if outbound.nodeID == nodeID { count += 1 }
+        }
+        let pendingFrameCount = scheduledFrameCount + controllerFrameCount
         return TopologyRemoteLinkRuntimeStatus(
             nodeID: nodeID,
             pairIdentifier: pairIdentifier,
@@ -1531,6 +1696,20 @@ extension TopologyNetworkRuntimeEngine {
               let pairIdentifier = normalizedRemoteLinkPairIdentifier(configuration.pairIdentifier)
         else { return .missingConfiguration }
         guard configuration.isEnabled else { return .disabled }
+        if configuration.transportMode == .localNetwork {
+            let isLocalPortAttached = node.ports.first.flatMap { attachedEndpoint(nodeID: nodeID, portID: $0.id) } != nil
+            guard isLocalPortAttached else { return .detachedLAN }
+            switch state.lanRemoteLinkConnectionStateByNodeID[nodeID] ?? .inactive {
+            case .inactive, .listening, .browsing:
+                return .waitingForPeer
+            case .connecting, .reconnecting:
+                return .connecting
+            case let .connected(peerName):
+                return .activeLAN(peerName: peerName)
+            case let .failed(message):
+                return .connectionFailed(message: message)
+            }
+        }
 
         let enabledMatches = state.topologySnapshot.nodes.compactMap { candidate -> UUID? in
             guard candidate.kind == .remoteLink,
@@ -1667,6 +1846,11 @@ extension TopologyNetworkRuntimeEngine {
         }
         state.remoteLinkSeenFrameIdentitiesByNodeID[remoteLinkNode.id, default: []].insert(frame.identity)
 
+        if state.topologySnapshot.remoteLinkConfigurationsByNodeID[remoteLinkNode.id]?.transportMode == .localNetwork {
+            forwardFrameThroughLANRemoteLink(frame, remoteLinkNode: remoteLinkNode, incomingPortID: incomingPortID)
+            return
+        }
+
         guard let condition = remoteLinkCondition(nodeID: remoteLinkNode.id) else { return }
         let partnerNodeID: UUID
         switch condition {
@@ -1727,6 +1911,17 @@ extension TopologyNetworkRuntimeEngine {
             return
         case let .active(resolvedPartnerNodeID):
             partnerNodeID = resolvedPartnerNodeID
+        case .detachedLAN, .waitingForPeer, .connecting, .connectionFailed, .activeLAN:
+            dropRemoteLinkFrame(
+                frame,
+                nodeID: remoteLinkNode.id,
+                interfaceID: incomingPortID,
+                partnerNodeID: nil,
+                pairIdentifier: pairIdentifier,
+                reason: .pairNoLongerActive,
+                detail: "remote link transport mode changed"
+            )
+            return
         }
 
         guard let configuration = state.topologySnapshot.remoteLinkConfigurationsByNodeID[remoteLinkNode.id],
@@ -1809,6 +2004,285 @@ extension TopologyNetworkRuntimeEngine {
                 latencyMilliseconds: configuration.latencyMilliseconds
             )
         )
+    }
+
+    private mutating func forwardFrameThroughLANRemoteLink(
+        _ frame: TopologyEthernetFrame,
+        remoteLinkNode: TopologyNetworkRuntimeNodeSnapshot,
+        incomingPortID: UUID
+    ) {
+        guard let configuration = state.topologySnapshot.remoteLinkConfigurationsByNodeID[remoteLinkNode.id],
+              let pairIdentifier = normalizedRemoteLinkPairIdentifier(configuration.pairIdentifier)
+        else {
+            dropRemoteLinkFrame(
+                frame,
+                nodeID: remoteLinkNode.id,
+                interfaceID: incomingPortID,
+                partnerNodeID: nil,
+                pairIdentifier: nil,
+                reason: .missingConfiguration,
+                detail: "LAN remote link configuration missing"
+            )
+            return
+        }
+        guard case .activeLAN = remoteLinkCondition(nodeID: remoteLinkNode.id) else {
+            dropRemoteLinkFrame(
+                frame,
+                nodeID: remoteLinkNode.id,
+                interfaceID: incomingPortID,
+                partnerNodeID: nil,
+                pairIdentifier: pairIdentifier,
+                reason: .pairNoLongerActive,
+                detail: "LAN remote link peer unavailable"
+            )
+            return
+        }
+        guard let effectiveLatencyMilliseconds = runtimeSpeed.scaledLinkDelay(
+            baseMilliseconds: configuration.latencyMilliseconds
+        ) else {
+            dropRemoteLinkFrame(
+                frame,
+                nodeID: remoteLinkNode.id,
+                interfaceID: incomingPortID,
+                partnerNodeID: nil,
+                pairIdentifier: pairIdentifier,
+                reason: .latencyOverflow,
+                detail: "LAN remote link speed scaling overflow"
+            )
+            return
+        }
+        let pendingLANTransmissions = state.pendingEvents.lazy.filter { event in
+            guard case let .lanRemoteLinkTransmission(nodeID, _, _, _) = event.kind else { return false }
+            return nodeID == remoteLinkNode.id
+        }.count
+        let queuedLANTransmissions = state.lanRemoteLinkOutboundFrames.lazy.filter {
+            $0.nodeID == remoteLinkNode.id
+        }.count
+        guard pendingLANTransmissions + queuedLANTransmissions
+            < Self.maximumPendingLANRemoteLinkTransmissionsPerNode
+        else {
+            dropRemoteLinkFrame(
+                frame,
+                nodeID: remoteLinkNode.id,
+                interfaceID: incomingPortID,
+                partnerNodeID: nil,
+                pairIdentifier: pairIdentifier,
+                reason: .lanOutboundQueueOverflow,
+                detail: "LAN remote link pending schedule full limit=\(Self.maximumPendingLANRemoteLinkTransmissionsPerNode)"
+            )
+            return
+        }
+        let (deadlineMilliseconds, overflowed) = state.currentTimeMilliseconds.addingReportingOverflow(
+            effectiveLatencyMilliseconds
+        )
+        guard !overflowed else {
+            dropRemoteLinkFrame(
+                frame,
+                nodeID: remoteLinkNode.id,
+                interfaceID: incomingPortID,
+                partnerNodeID: nil,
+                pairIdentifier: pairIdentifier,
+                reason: .latencyOverflow,
+                detail: "LAN remote link latency overflow"
+            )
+            return
+        }
+        _ = schedule(
+            deadlineMilliseconds: deadlineMilliseconds,
+            kind: .lanRemoteLinkTransmission(
+                nodeID: remoteLinkNode.id,
+                pairIdentifier: pairIdentifier,
+                latencyMilliseconds: configuration.latencyMilliseconds,
+                frame: frame
+            )
+        )
+        recordRemoteLinkEvidence(
+            frameIdentity: frame.identity,
+            nodeID: remoteLinkNode.id,
+            partnerNodeID: nil,
+            pairIdentifier: pairIdentifier,
+            kind: .scheduled(
+                deadlineMilliseconds: deadlineMilliseconds,
+                latencyMilliseconds: configuration.latencyMilliseconds
+            )
+        )
+    }
+
+    private mutating func deliverLANRemoteLinkFrame(
+        nodeID: UUID,
+        pairIdentifier: String,
+        latencyMilliseconds: UInt64,
+        frame: TopologyEthernetFrame
+    ) {
+        guard case .activeLAN = remoteLinkCondition(nodeID: nodeID) else {
+            dropRemoteLinkFrame(
+                frame,
+                nodeID: nodeID,
+                interfaceID: sourceStatusLocalPortID(nodeID: nodeID),
+                partnerNodeID: nil,
+                pairIdentifier: pairIdentifier,
+                reason: .pairNoLongerActive,
+                detail: "LAN remote link disconnected before delivery"
+            )
+            return
+        }
+        let queuedForNode = state.lanRemoteLinkOutboundFrames.reduce(into: 0) { count, outbound in
+            if outbound.nodeID == nodeID { count += 1 }
+        }
+        let queueLimit = Self.maximumLANRemoteLinkOutboundFramesPerNode
+        guard queuedForNode < queueLimit else {
+            dropRemoteLinkFrame(
+                frame,
+                nodeID: nodeID,
+                interfaceID: sourceStatusLocalPortID(nodeID: nodeID),
+                partnerNodeID: nil,
+                pairIdentifier: pairIdentifier,
+                reason: .lanOutboundQueueOverflow,
+                detail: "LAN remote link runtime queue full limit=\(queueLimit)"
+            )
+            return
+        }
+
+        let transmissionID = state.nextLANRemoteLinkTransmissionIdentity
+        state.nextLANRemoteLinkTransmissionIdentity &+= 1
+        state.lanRemoteLinkOutboundFrames.append(
+            TopologyRemoteLinkLANOutboundFrame(
+                transmissionID: transmissionID,
+                nodeID: nodeID,
+                frameIdentity: frame.identity,
+                packetIdentity: packetIdentity(in: frame),
+                interfaceID: sourceStatusLocalPortID(nodeID: nodeID),
+                pairIdentifier: pairIdentifier,
+                frame: TopologyRemoteLinkWireFrame(frame: frame),
+                state: .pending
+            )
+        )
+        recordTrace(
+            frameIdentity: frame.identity,
+            packetIdentity: packetIdentity(in: frame),
+            nodeID: nodeID,
+            interfaceID: sourceStatusLocalPortID(nodeID: nodeID),
+            direction: .outbound,
+            layer: .dataLink,
+            operation: .forwarded,
+            beforeHeaders: ethernetHeaders(frame),
+            afterHeaders: ethernetHeaders(frame),
+            detail: "LAN remote link queued pair=\(pairIdentifier) latencyMs=\(latencyMilliseconds) transmission=\(transmissionID)"
+        )
+    }
+
+    mutating func setLANRemoteLinkConnectionState(
+        nodeID: UUID,
+        connectionState: TopologyRemoteLinkLANConnectionState
+    ) {
+        guard nodeSnapshot(nodeID: nodeID)?.kind == .remoteLink else { return }
+        state.lanRemoteLinkConnectionStateByNodeID[nodeID] = connectionState
+    }
+
+    mutating func claimLANRemoteLinkOutboundFrames(limit: Int = 64) -> [TopologyRemoteLinkLANOutboundFrame] {
+        guard limit > 0 else { return [] }
+        let transmissionIDs = state.lanRemoteLinkOutboundFrames.lazy
+            .filter { $0.state == .pending }
+            .prefix(limit)
+            .map(\.transmissionID)
+        let claimedIDs = Set(transmissionIDs)
+        guard !claimedIDs.isEmpty else { return [] }
+        for index in state.lanRemoteLinkOutboundFrames.indices
+        where claimedIDs.contains(state.lanRemoteLinkOutboundFrames[index].transmissionID) {
+            state.lanRemoteLinkOutboundFrames[index].state = .awaitingControllerAcknowledgement
+        }
+        return state.lanRemoteLinkOutboundFrames.filter { claimedIDs.contains($0.transmissionID) }
+    }
+
+    mutating func completeLANRemoteLinkOutboundFrame(
+        nodeID: UUID,
+        transmissionID: UInt64,
+        result: TopologyRemoteLinkLANSendResult
+    ) {
+        guard let index = state.lanRemoteLinkOutboundFrames.firstIndex(where: {
+            $0.nodeID == nodeID && $0.transmissionID == transmissionID
+        }) else { return }
+        let outbound = state.lanRemoteLinkOutboundFrames.remove(at: index)
+        switch result {
+        case let .accepted(attempts):
+            recordTrace(
+                frameIdentity: outbound.frameIdentity,
+                packetIdentity: outbound.packetIdentity,
+                nodeID: outbound.nodeID,
+                interfaceID: outbound.interfaceID,
+                direction: .outbound,
+                layer: .dataLink,
+                operation: attempts > 1 ? .retransmitted : .sent,
+                afterHeaders: wireEthernetHeaders(outbound.frame),
+                detail: "LAN remote link peer acknowledged transmission=\(transmissionID) attempts=\(attempts)"
+            )
+            recordRemoteLinkEvidence(
+                frameIdentity: outbound.frameIdentity,
+                nodeID: outbound.nodeID,
+                partnerNodeID: nil,
+                pairIdentifier: outbound.pairIdentifier,
+                kind: .delivered
+            )
+        case let .failed(failure):
+            recordTrace(
+                frameIdentity: outbound.frameIdentity,
+                packetIdentity: outbound.packetIdentity,
+                nodeID: outbound.nodeID,
+                interfaceID: outbound.interfaceID,
+                direction: .local,
+                layer: .dataLink,
+                operation: .dropped,
+                beforeHeaders: wireEthernetHeaders(outbound.frame),
+                detail: failure.summary
+            )
+            recordRemoteLinkEvidence(
+                frameIdentity: outbound.frameIdentity,
+                nodeID: outbound.nodeID,
+                partnerNodeID: nil,
+                pairIdentifier: outbound.pairIdentifier,
+                kind: .dropped(reason: .lanDeliveryFailed)
+            )
+        }
+    }
+
+    private func wireEthernetHeaders(_ frame: TopologyRemoteLinkWireFrame) -> [TopologyPacketHeaderField] {
+        [
+            TopologyPacketHeaderField(name: "sourceMAC", value: frame.sourceMACAddress),
+            TopologyPacketHeaderField(name: "destinationMAC", value: frame.destinationMACAddress),
+        ]
+    }
+
+    @discardableResult
+    mutating func receiveLANRemoteLinkFrame(
+        _ wireFrame: TopologyRemoteLinkWireFrame,
+        nodeID: UUID
+    ) -> Bool {
+        guard state.phase == .running,
+              let node = nodeSnapshot(nodeID: nodeID),
+              node.kind == .remoteLink,
+              let configuration = state.topologySnapshot.remoteLinkConfigurationsByNodeID[nodeID],
+              configuration.isEnabled,
+              configuration.transportMode == .localNetwork,
+              case .activeLAN = remoteLinkCondition(nodeID: nodeID),
+              let portID = node.ports.first?.id,
+              attachedEndpoint(nodeID: nodeID, portID: portID) != nil
+        else { return false }
+
+        let frame = materializeLANRemoteLinkFrame(wireFrame)
+        state.remoteLinkSeenFrameIdentitiesByNodeID[nodeID, default: []].insert(frame.identity)
+        recordTrace(
+            frameIdentity: frame.identity,
+            packetIdentity: packetIdentity(in: frame),
+            nodeID: nodeID,
+            interfaceID: portID,
+            direction: .inbound,
+            layer: .dataLink,
+            operation: .received,
+            afterHeaders: ethernetHeaders(frame),
+            detail: "LAN remote link frame received"
+        )
+        sendEthernetFrame(fromNodeID: nodeID, outgoingPortID: portID, frame: frame)
+        return true
     }
 
     private mutating func deliverRemoteLinkFrame(
@@ -2836,6 +3310,40 @@ extension TopologyNetworkRuntimeEngine {
         ]
     }
 
+    @discardableResult
+    mutating func replaceManualRoutes(
+        nodeID: UUID,
+        routes: [TopologyRuntimeManualRoute]
+    ) -> Bool {
+        guard state.phase == .running,
+              let node = state.topologySnapshot.nodes.first(where: { $0.id == nodeID }),
+              node.kind == .router || node.kind == .gateway
+        else { return false }
+
+        var routesByNodeID = state.topologySnapshot.manualRoutesByNodeID
+        if routes.isEmpty {
+            routesByNodeID.removeValue(forKey: nodeID)
+        } else {
+            routesByNodeID[nodeID] = routes
+        }
+        state.topologySnapshot = TopologyNetworkRuntimeTopologySnapshot(
+            nodes: state.topologySnapshot.nodes,
+            links: state.topologySnapshot.links,
+            deviceConfigurations: state.topologySnapshot.deviceConfigurations,
+            interfaceConfigurations: state.topologySnapshot.interfaceConfigurations,
+            manualRoutesByNodeID: routesByNodeID,
+            ripEnabledByNodeID: state.topologySnapshot.ripEnabledByNodeID,
+            dhcpClientConfigurationsByNodeID: state.topologySnapshot.dhcpClientConfigurationsByNodeID,
+            dhcpServerConfigurationsByNodeID: state.topologySnapshot.dhcpServerConfigurationsByNodeID,
+            firewallConfigurationsByNodeID: state.topologySnapshot.firewallConfigurationsByNodeID,
+            portForwardingRowsByNodeID: state.topologySnapshot.portForwardingRowsByNodeID,
+            switchConfigurationsByNodeID: state.topologySnapshot.switchConfigurationsByNodeID,
+            remoteLinkConfigurationsByNodeID: state.topologySnapshot.remoteLinkConfigurationsByNodeID,
+            hostWirelessConfigurationsByNodeID: state.topologySnapshot.hostWirelessConfigurationsByNodeID
+        )
+        return true
+    }
+
     mutating func setFirewallConfiguration(
         nodeID: UUID,
         configuration: TopologyFirewallConfiguration
@@ -3548,6 +4056,181 @@ extension TopologyNetworkRuntimeEngine {
         )
     }
 
+    /// Exchanges a typed DNS question with a running simulated DNS listener.
+    ///
+    /// Record selection remains in `TopologyDNSResolver`; this method supplies the network
+    /// semantics that resolver deliberately does not own: routing, ARP, firewall/NAT handling,
+    /// global packet loss, service availability, and packet-capture traces.
+    mutating func consultDNSServer(
+        clientNodeID: UUID,
+        serverIPAddress: String,
+        question: TopologyDNSQuestion,
+        timeoutMilliseconds: UInt64 = TopologyNetworkRuntimeEngine.dnsDefaultTimeoutMilliseconds
+    ) -> Bool {
+        consultDNSServerWithResult(
+            clientNodeID: clientNodeID,
+            serverIPAddress: serverIPAddress,
+            question: question,
+            timeoutMilliseconds: timeoutMilliseconds
+        ) == .available
+    }
+
+    mutating func consultDNSServerWithResult(
+        clientNodeID: UUID,
+        serverIPAddress: String,
+        question: TopologyDNSQuestion,
+        timeoutMilliseconds: UInt64 = TopologyNetworkRuntimeEngine.dnsDefaultTimeoutMilliseconds
+    ) -> TopologyDNSConsultationResult {
+        guard state.phase == .running else { return .unreachable }
+        guard let clientSocketID = bindUDPSocket(
+            nodeID: clientNodeID,
+            remoteIPAddress: serverIPAddress,
+            remotePort: Self.dnsPort
+        ) else { return .unreachable }
+        defer { discardSocket(socketID: clientSocketID) }
+
+        let transactionID = state.nextDNSQuerySequenceNumber
+        state.nextDNSQuerySequenceNumber &+= 1
+        let queryPayload = Data([
+            "FILIUS-DNS-TYPED/1",
+            String(transactionID),
+            question.type.rawValue,
+            question.name.rawValue,
+        ].joined(separator: "\n").utf8)
+        let queryDelivery = sendUDP(
+            socketID: clientSocketID,
+            payload: queryPayload,
+            destinationIPAddress: serverIPAddress,
+            destinationPort: Self.dnsPort
+        )
+        recordTrace(
+            packetIdentity: packetIdentity(from: queryDelivery),
+            nodeID: clientNodeID,
+            interfaceID: networkInterfaces(nodeID: clientNodeID).first?.portID,
+            direction: .outbound,
+            layer: .application,
+            operation: .sent,
+            afterHeaders: dnsHeaders(
+                transactionID: transactionID,
+                hostname: question.name.rawValue,
+                recordType: question.type.rawValue,
+                responseCode: nil,
+                targetIPAddress: nil,
+                cacheStatus: "MISS"
+            ),
+            detail: "DNS query typed server=\(serverIPAddress)"
+        )
+        switch queryDelivery {
+        case .some(.delivered(_, _)):
+            break
+        case .some(.dropped(_, _)):
+            return .timedOut
+        case .some(.icmpError(_, _, _)), .none:
+            return .unreachable
+        }
+
+        let serverNodeIDs = state.topologySnapshot.nodes
+            .filter { node in
+                networkInterfaces(nodeID: node.id).contains(where: { $0.ipAddress == serverIPAddress })
+            }
+            .map(\.id)
+            .sorted { $0.uuidString < $1.uuidString }
+        guard serverNodeIDs.count == 1, let serverNodeID = serverNodeIDs.first else {
+            return .unreachable
+        }
+        guard let serverSocketID = state.socketsByID.values
+            .filter({ socket in
+                socket.nodeID == serverNodeID
+                    && socket.protocolKind == .udp
+                    && socket.localPort == Self.dnsPort
+            })
+            .sorted(by: { $0.id.uuidString < $1.id.uuidString })
+            .first?.id
+        else {
+            _ = receiveUDP(socketID: clientSocketID, timeoutMilliseconds: timeoutMilliseconds)
+            return .timedOut
+        }
+
+        guard let receivedQuery = receiveUDP(socketID: serverSocketID),
+              receivedQuery.datagram.payload == queryPayload
+        else {
+            _ = receiveUDP(socketID: clientSocketID, timeoutMilliseconds: timeoutMilliseconds)
+            return .timedOut
+        }
+        recordTrace(
+            nodeID: serverNodeID,
+            interfaceID: networkInterfaces(nodeID: serverNodeID).first?.portID,
+            direction: .local,
+            layer: .application,
+            operation: .accepted,
+            beforeHeaders: dnsHeaders(
+                transactionID: transactionID,
+                hostname: question.name.rawValue,
+                recordType: question.type.rawValue,
+                responseCode: nil,
+                targetIPAddress: nil,
+                cacheStatus: nil
+            ),
+            detail: "DNS query typed received"
+        )
+
+        let responsePayload = Data("FILIUS-DNS-TYPED/1\n\(transactionID)\nACK".utf8)
+        let responseDelivery = sendUDP(
+            socketID: serverSocketID,
+            payload: responsePayload,
+            destinationIPAddress: receivedQuery.senderIPAddress,
+            destinationPort: receivedQuery.datagram.sourcePort
+        )
+        recordTrace(
+            packetIdentity: packetIdentity(from: responseDelivery),
+            nodeID: serverNodeID,
+            interfaceID: networkInterfaces(nodeID: serverNodeID).first?.portID,
+            direction: .outbound,
+            layer: .application,
+            operation: .sent,
+            afterHeaders: dnsHeaders(
+                transactionID: transactionID,
+                hostname: question.name.rawValue,
+                recordType: question.type.rawValue,
+                responseCode: .noError,
+                targetIPAddress: nil,
+                cacheStatus: nil
+            ),
+            detail: "DNS response typed"
+        )
+        switch responseDelivery {
+        case .some(.delivered(_, _)):
+            break
+        case .some(.dropped(_, _)):
+            return .timedOut
+        case .some(.icmpError(_, _, _)), .none:
+            return .unreachable
+        }
+        guard let receivedResponse = receiveUDP(
+            socketID: clientSocketID,
+            timeoutMilliseconds: timeoutMilliseconds
+        ), receivedResponse.datagram.payload == responsePayload
+        else { return .timedOut }
+
+        recordTrace(
+            nodeID: clientNodeID,
+            interfaceID: networkInterfaces(nodeID: clientNodeID).first?.portID,
+            direction: .local,
+            layer: .application,
+            operation: .accepted,
+            beforeHeaders: dnsHeaders(
+                transactionID: transactionID,
+                hostname: question.name.rawValue,
+                recordType: question.type.rawValue,
+                responseCode: .noError,
+                targetIPAddress: nil,
+                cacheStatus: "MISS"
+            ),
+            detail: "DNS response typed received"
+        )
+        return .available
+    }
+
     mutating func resolveDNS(
         clientNodeID: UUID,
         serverIPAddress: String,
@@ -3758,6 +4441,7 @@ extension TopologyNetworkRuntimeEngine {
     private func dnsHeaders(
         transactionID: UInt64?,
         hostname: String,
+        recordType: String? = nil,
         responseCode: TopologyRuntimeDNSResponseCode?,
         targetIPAddress: String?,
         cacheStatus: String?
@@ -3768,6 +4452,9 @@ extension TopologyNetworkRuntimeEngine {
         ]
         if let transactionID {
             headers.append(TopologyPacketHeaderField(name: "transactionID", value: String(transactionID)))
+        }
+        if let recordType {
+            headers.append(TopologyPacketHeaderField(name: "recordType", value: recordType))
         }
         if let responseCode {
             headers.append(TopologyPacketHeaderField(name: "responseCode", value: responseCode.rawValue))
@@ -4079,6 +4766,13 @@ extension TopologyNetworkRuntimeEngine {
         case let .tcpTimeout(sessionID):
             handleTCPTimeout(socketID: sessionID)
         case let .ethernetLinkDelivery(_, targetNodeID, targetPortID, _, frame):
+            guard !dropForGlobalPacketLoss(
+                frame,
+                nodeID: targetNodeID,
+                interfaceID: targetPortID,
+                direction: .inbound,
+                layer: .physical
+            ) else { return }
             receiveEthernetFrame(frame, atNodeID: targetNodeID, incomingPortID: targetPortID)
         case let .remoteLinkDelivery(
             sourceNodeID,
@@ -4088,10 +4782,31 @@ extension TopologyNetworkRuntimeEngine {
             latencyMilliseconds,
             frame
         ):
+            guard !dropForGlobalPacketLoss(
+                frame,
+                nodeID: partnerNodeID,
+                interfaceID: partnerPortID,
+                direction: .inbound,
+                layer: .dataLink
+            ) else { return }
             deliverRemoteLinkFrame(
                 sourceNodeID: sourceNodeID,
                 partnerNodeID: partnerNodeID,
                 partnerPortID: partnerPortID,
+                pairIdentifier: pairIdentifier,
+                latencyMilliseconds: latencyMilliseconds,
+                frame: frame
+            )
+        case let .lanRemoteLinkTransmission(nodeID, pairIdentifier, latencyMilliseconds, frame):
+            guard !dropForGlobalPacketLoss(
+                frame,
+                nodeID: nodeID,
+                interfaceID: sourceStatusLocalPortID(nodeID: nodeID),
+                direction: .outbound,
+                layer: .dataLink
+            ) else { return }
+            deliverLANRemoteLinkFrame(
+                nodeID: nodeID,
                 pairIdentifier: pairIdentifier,
                 latencyMilliseconds: latencyMilliseconds,
                 frame: frame
@@ -4107,6 +4822,28 @@ extension TopologyNetworkRuntimeEngine {
         case .parityMarker:
             break
         }
+    }
+
+    private mutating func dropForGlobalPacketLoss(
+        _ frame: TopologyEthernetFrame,
+        nodeID: UUID,
+        interfaceID: UUID?,
+        direction: TopologyPacketTraceDirection,
+        layer: TopologyPacketTraceLayer
+    ) -> Bool {
+        guard state.globalPacketLossEnabled else { return false }
+        recordTrace(
+            frameIdentity: frame.identity,
+            packetIdentity: packetIdentity(in: frame),
+            nodeID: nodeID,
+            interfaceID: interfaceID,
+            direction: direction,
+            layer: layer,
+            operation: .dropped,
+            afterHeaders: ethernetHeaders(frame),
+            detail: "global packet-loss simulation"
+        )
+        return true
     }
 
     private func isRIPEnabledRouter(nodeID: UUID) -> Bool {
@@ -5183,6 +5920,97 @@ extension TopologyNetworkRuntimeEngine {
     static let dhcpDynamicLeaseLifetimeMilliseconds: UInt64 = 24 * 60 * 60 * 1_000
     static let dhcpMaximumClientErrorCount = 10
 
+    @discardableResult
+    mutating func reconfigureDHCPServer(
+        nodeID: UUID,
+        configuration: TopologyDHCPServerConfiguration
+    ) -> Result<TopologyRuntimeDHCPServerReconfiguration, TopologyRuntimeDHCPServerReconfigurationError> {
+        guard state.phase == .running else { return .failure(.runtimeStopped) }
+        guard let node = nodeSnapshot(nodeID: nodeID),
+              node.kind.isPCClassEndpoint || node.kind == .gateway
+        else { return .failure(.unsupportedNode) }
+
+        let existingSocketID = state.dhcpServerSocketIDsByNodeID[nodeID]
+        let reusableSocketID: UUID?
+        if let existingSocketID,
+           let socket = state.socketsByID[existingSocketID],
+           socket.nodeID == nodeID,
+           socket.protocolKind == .udp,
+           socket.localPort == Self.dhcpServerPort,
+           let interface = dhcpServerInterface(nodeID: nodeID),
+           socket.localIPAddress == interface.ipAddress {
+            reusableSocketID = existingSocketID
+        } else {
+            reusableSocketID = nil
+        }
+
+        let listenerSocketID: UUID?
+        if configuration.isActive {
+            guard let interface = dhcpServerInterface(nodeID: nodeID) else {
+                return .failure(.interfaceUnavailable)
+            }
+            if let reusableSocketID {
+                listenerSocketID = reusableSocketID
+            } else {
+                guard let socketID = bindUDPSocket(
+                    nodeID: nodeID,
+                    localPort: Self.dhcpServerPort,
+                    localIPAddress: interface.ipAddress,
+                    remoteIPAddress: Self.limitedBroadcastIPAddress,
+                    remotePort: Self.dhcpClientPort
+                ) else {
+                    return .failure(.listenerBindFailed)
+                }
+                listenerSocketID = socketID
+            }
+        } else {
+            listenerSocketID = nil
+        }
+
+        // All fallible work is complete. From this point the snapshot, listener registry, and
+        // transient allocator state are committed synchronously as one inout runtime mutation.
+        var configurations = state.topologySnapshot.dhcpServerConfigurationsByNodeID
+        configurations[nodeID] = configuration
+        state.topologySnapshot = TopologyNetworkRuntimeTopologySnapshot(
+            nodes: state.topologySnapshot.nodes,
+            links: state.topologySnapshot.links,
+            deviceConfigurations: state.topologySnapshot.deviceConfigurations,
+            interfaceConfigurations: state.topologySnapshot.interfaceConfigurations,
+            manualRoutesByNodeID: state.topologySnapshot.manualRoutesByNodeID,
+            ripEnabledByNodeID: state.topologySnapshot.ripEnabledByNodeID,
+            dhcpClientConfigurationsByNodeID: state.topologySnapshot.dhcpClientConfigurationsByNodeID,
+            dhcpServerConfigurationsByNodeID: configurations,
+            firewallConfigurationsByNodeID: state.topologySnapshot.firewallConfigurationsByNodeID,
+            portForwardingRowsByNodeID: state.topologySnapshot.portForwardingRowsByNodeID,
+            switchConfigurationsByNodeID: state.topologySnapshot.switchConfigurationsByNodeID,
+            remoteLinkConfigurationsByNodeID: state.topologySnapshot.remoteLinkConfigurationsByNodeID,
+            hostWirelessConfigurationsByNodeID: state.topologySnapshot.hostWirelessConfigurationsByNodeID
+        )
+
+        if existingSocketID != listenerSocketID, let existingSocketID {
+            closeSocket(socketID: existingSocketID)
+        }
+        if let listenerSocketID {
+            state.dhcpServerSocketIDsByNodeID[nodeID] = listenerSocketID
+        } else {
+            state.dhcpServerSocketIDsByNodeID.removeValue(forKey: nodeID)
+        }
+
+        // Preserve committed leases so a control-plane edit cannot silently revoke a client's
+        // address. Discard only uncommitted offers and allocator/backoff state; a later client
+        // rebind replaces that client's old reservation.
+        state.dhcpOffersByIPAddress = state.dhcpOffersByIPAddress.filter { _, offer in
+            offer.serverNodeID != nodeID
+        }
+        state.dhcpBlacklistByServerNodeID.removeValue(forKey: nodeID)
+        state.dhcpLastOfferedAddressByServerNodeID.removeValue(forKey: nodeID)
+
+        return .success(TopologyRuntimeDHCPServerReconfiguration(
+            listenerSocketID: listenerSocketID,
+            existingLeasePolicy: .preserveUntilExpiryOrClientRebind
+        ))
+    }
+
     private mutating func initializeDHCPState() {
         state.dhcpOffersByIPAddress.removeAll()
         state.dhcpLeasesByIPAddress.removeAll()
@@ -5576,13 +6404,12 @@ extension TopologyNetworkRuntimeEngine {
             $0.macAddress.caseInsensitiveCompare(clientMACAddress) == .orderedSame
                 && $0.ipAddress.caseInsensitiveCompare(requestedIPAddress) == .orderedSame
         }) {
-            let key = dhcpRecordKey(serverNodeID: serverNodeID, ipAddress: requestedIPAddress)
-            state.dhcpLeasesByIPAddress[key] = TopologyRuntimeDHCPLeaseRecord(
+            storeDHCPLease(TopologyRuntimeDHCPLeaseRecord(
                 clientMACAddress: clientMACAddress,
                 ipAddress: requestedIPAddress,
                 serverNodeID: serverNodeID,
                 expiresAtMilliseconds: nil
-            )
+            ))
             return true
         }
 
@@ -5599,13 +6426,24 @@ extension TopologyNetworkRuntimeEngine {
             accepted = isDHCPAddressAvailable(serverNodeID: serverNodeID, ipAddress: requestedIPAddress)
         }
         guard accepted else { return false }
-        state.dhcpLeasesByIPAddress[key] = TopologyRuntimeDHCPLeaseRecord(
+        storeDHCPLease(TopologyRuntimeDHCPLeaseRecord(
             clientMACAddress: clientMACAddress,
             ipAddress: requestedIPAddress,
             serverNodeID: serverNodeID,
             expiresAtMilliseconds: state.currentTimeMilliseconds + Self.dhcpDynamicLeaseLifetimeMilliseconds
-        )
+        ))
         return true
+    }
+
+    private mutating func storeDHCPLease(_ lease: TopologyRuntimeDHCPLeaseRecord) {
+        state.dhcpLeasesByIPAddress = state.dhcpLeasesByIPAddress.filter { _, existing in
+            existing.serverNodeID != lease.serverNodeID
+                || existing.clientMACAddress.caseInsensitiveCompare(lease.clientMACAddress) != .orderedSame
+        }
+        state.dhcpLeasesByIPAddress[dhcpRecordKey(
+            serverNodeID: lease.serverNodeID,
+            ipAddress: lease.ipAddress
+        )] = lease
     }
 
     private mutating func isDHCPAddressAvailable(serverNodeID: UUID, ipAddress: String) -> Bool {
@@ -6461,18 +7299,23 @@ extension TopologyNetworkRuntimeEngine {
         return true
     }
 
+    static func isPacketCaptureEligible(_ trace: TopologyPacketTraceEvent) -> Bool {
+        trace.interfaceID != nil
+            && trace.operation != .compatibilityAdapter
+            && (trace.frameIdentity != nil || trace.packetIdentity != nil)
+    }
+
     func packetCaptureMessageRows(nodeID: UUID) -> [TopologyPacketMessageRow] {
         packetMessageRows(nodeID: nodeID).filter { row in
-            let trace = row.trace
-            return trace.interfaceID != nil
-                && trace.operation != .compatibilityAdapter
-                && (trace.frameIdentity != nil || trace.packetIdentity != nil)
+            Self.isPacketCaptureEligible(row.trace)
         }
     }
 
     func packetCaptureTabs(nodeID: UUID) -> [TopologyPacketCaptureTab] {
         guard let node = state.topologySnapshot.nodes.first(where: { $0.id == nodeID }) else { return [] }
-        let counts = Dictionary(grouping: state.packetTraces.filter { $0.nodeID == nodeID && $0.interfaceID != nil }) {
+        let counts = Dictionary(grouping: state.packetTraces.filter { trace in
+            trace.nodeID == nodeID && Self.isPacketCaptureEligible(trace)
+        }) {
             $0.interfaceID!
         }.mapValues { $0.count }
 

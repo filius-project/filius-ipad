@@ -30,6 +30,8 @@ Apple's published submission requirement effective **April 28, 2026** requires i
 - `release/app-store/export-compliance.json`: encryption/export determination record.
 - `release/signing/secret-contract.json`: names and purposes only; never values.
 - `release/notes/next.md`: staged release notes.
+- `docs/release/upstream-material-inventory.md`: conservative material/provenance inventory for legal and third-party review.
+- `LICENSE-STATUS.md`: executed Apple-platform permission record and continuing publication obligations.
 - `CHANGELOG.md`: durable user-visible change history.
 
 ## Validation commands
@@ -46,6 +48,10 @@ python scripts/project/validate_project_readiness.py --release
 ```
 
 The release-mode command is expected to fail until accountable owners replace every placeholder, a signed archive exists, privacy/export answers match that archive, and real-device/TestFlight evidence is linked.
+
+## Legal status
+
+The Apple-platform additional permission is executed and effective August 23, 2026. The public clean copy is included in the repository and the app’s legal resources. The signed scan and paper original remain private. This resolves the former legal-permission blocker but does not establish Apple account access, signing, App Store Connect metadata approval, privacy/export approval, physical-device acceptance, or App Review approval.
 
 ## What remains intentionally impossible
 

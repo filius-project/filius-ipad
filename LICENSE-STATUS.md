@@ -1,37 +1,37 @@
 # License status and distribution gate
 
-**Status: unresolved — private repository only**
+**Status: executed Apple-platform additional permission received; App Store release gates remain open**
 
-No final public license has been selected for Filius on iPad. This file is a release gate and is not itself a software license.
+This file is a release record, not a standalone software license. Filius on iPad remains an independently maintained adaptation of Filius. Covered Filius material continues to be available under the applicable GNU General Public License, version 2 or version 3, at the recipient’s choice. The executed additional permission supplements that GPL choice for Apple-platform and project-controlled distribution.
 
-## Current position
+## Executed permission record
 
-- The iPad application was developed as an adaptation of the Filius network simulator.
-- The application contains source concepts, compatibility behavior, `.fls` fixtures, and visual assets originating from Filius.
-- `ios/FiliusPad/TopologyEditor/Assets/JavaParity/` contains files that are byte-identical to resources in the upstream Filius distribution.
-- The application currently displays the upstream “GPLv2 or GPLv3” license wording. That presentation must be reviewed and changed if a separate license is signed.
-- The Filius maintainer has indicated willingness to authorize App Store distribution, but the signatory’s authority over every covered contribution and asset must be documented.
+- Document ID: `FILIUS-APPLE-PERMISSION-1.1`
+- Record ID: `FILIUS-APPLE-PERMISSION-001`
+- Document date: August 9, 2026
+- Latest signing date recorded on the returned fully signed scan: August 23, 2026
+- Scope: covered Filius material already incorporated from the listed upstream releases, qualifying future official stable upstream releases, Apple distribution channels and services, and direct project-controlled channels, subject to the agreement’s conditions
+- Public copy: [`docs/legal/public/filius-app-store-additional-permission.de.md`](docs/legal/public/filius-app-store-additional-permission.de.md) and [`docs/legal/public/filius-app-store-additional-permission.en.md`](docs/legal/public/filius-app-store-additional-permission.en.md)
+- Private evidence: the signed scan and paper original remain outside Git; the scan SHA-256 is recorded in the private archive as required by the agreement
 
-## Required before any public release
+The returned scan is not a substitute for retaining the fully signed paper original. The original and private scan must remain secured and must not be committed to this repository.
 
-1. Identify the exact upstream Filius repository revision and all covered files, resources, fixtures, and documentation.
-2. Confirm which persons or entities own or control the relevant copyrights.
-3. Execute either:
-   - a separate license permitting this iPad project to be distributed under terms selected by Sören Schröder; or
-   - a GPL distribution agreement with a personal App Store exception.
-4. Execute a separate permission for the Filius name, logo, icons, and other project identifiers where necessary.
-5. Update the app’s Information screen, repository notices, App Store metadata, and website so they state the signed license accurately.
-6. Add the final signed/public license notice to this repository.
-7. Review every future external contribution under terms compatible with Apple distribution and the selected project license.
+## Required attribution and project status
 
-## Interim restrictions
+The app, public repository, documentation, and website must state prominently:
 
-Until the above gate is completed:
+> Based on Filius by Dr. Stefan Freischlad and the Filius project.
 
-- keep this repository private;
-- do not submit the app to the App Store or TestFlight for external distribution;
-- do not publish a source archive or binary release from this repository;
-- do not describe Filius on iPad as unrelated to or non-derived from Filius;
-- do not assume that maintainer status alone proves ownership of all contributions.
+They must also state that Filius on iPad is independently maintained and is not published, operated, or officially supported by the original Filius project. The project may use the authorized Filius names, icons, screenshots, graphics, and the `filius.app` domain to the extent covered by the executed permission, without implying official publication or support by the original project.
 
-The unsigned legal templates are stored under `docs/legal/` for later review and signature.
+## Continuing obligations
+
+- Keep the applicable GPL terms and complete corresponding source available as required by the GPL and the executed permission.
+- Keep the public copy of the additional permission and the GPLv2/GPLv3 texts accessible in the repository and the app’s legal information.
+- Review third-party dependencies and bundled tools under their own license terms; the additional permission does not replace them.
+- Require compatible licensing language for future contributions before accepting them.
+- Keep the legal owner, privacy, export-compliance, Apple account, signing, device, metadata, and App Review gates separately evidenced.
+
+## Publication decision
+
+The executed permission resolves the previously tracked missing Apple-distribution permission gate. It does **not** by itself prove App ID ownership, signing credentials, App Store Connect readiness, privacy/export approvals, real-iPad acceptance, or App Review approval. Those remain release blockers until separately evidenced in `docs/release/checklist.md`.
