@@ -34,6 +34,6 @@ This directory is the durable entry point for project status, validation, operat
 
 - [Legal publication boundary](legal/README.md)
 - [Permission SHA-256 attestation](legal/Filius-Apple-Permission.sha256)
-- [License status](../LICENSE-STATUS.md): effective date, attribution, and continuing obligations.
+- [License status](../LICENSE-STATUS.md): hash attestation, attribution, and continuing obligations.
 
 The executed permission is retained privately. The signed PDF, paper original, signatures, addresses, and agreement text remain outside Git; only the SHA-256 integrity attestation is published.

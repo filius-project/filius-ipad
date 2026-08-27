@@ -31,7 +31,7 @@ The agreement does not automatically cover unreleased development branches or in
 | Apple-specific Swift source, UI, persistence, and runtime behavior | `ios/FiliusPad/` outside `Assets/JavaParity/` | Independently maintained Apple edition code; contributor licensing terms are in `CONTRIBUTING.md` |
 | Bundled Java runtime components | `javaversion/filius-master/java-runtime/` | Retains component-specific notices under `java-runtime/legal/`; third-party review remains open |
 | Apple permission integrity attestation | `docs/legal/Filius-Apple-Permission.sha256` | SHA-256 only; no agreement text, addresses, signatures, or scan |
-| Private executed scan | `/Users/macbookairm2/src/filius-on-ipad-prod/docs/legal/Filius-app-store-exception-signed.pdf` | Private evidence only; never commit or publish |
+| Private executed scan | Outside this repository | Private evidence only; never commit or publish |
 
 ## Required follow-up before a public release
 
